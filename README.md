@@ -13,6 +13,14 @@ pixel-inspired style.
 ## GitHub Pages
 
 The repository includes a GitHub Actions workflow in `.github/workflows/pages.yml`.
-After this branch is merged into `main`, enable GitHub Pages in the repository settings
-and select **GitHub Actions** as the Pages source. Future pushes to `main` will deploy
-the site automatically.
+After this branch is merged into `main`, the workflow will enable GitHub Pages and
+deploy the site automatically.
+
+Expected public URL:
+
+```text
+https://62gt2vfhmy-web.github.io/yt/
+```
+
+If the first deployment is blocked by repository settings, open **Settings -> Pages**
+and select **GitHub Actions** as the Pages source, then rerun the workflow.
