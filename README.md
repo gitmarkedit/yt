@@ -1,6 +1,18 @@
-# Personal website concept
+# Personal website
 
-This repository contains a developer-ready brief for a personal website for a Python
-backend developer.
+Static personal website for a Python backend developer with a dark mysterious
+pixel-inspired style.
 
-- [Personal site brief](docs/personal-site-brief.md)
+## Files
+
+- `index.html` - page markup
+- `styles.css` - visual style, responsive layout, and animations
+- `script.js` - scroll reveal and contact copy behavior
+- `docs/personal-site-brief.md` - developer-ready concept brief
+
+## GitHub Pages
+
+The repository includes a GitHub Actions workflow in `.github/workflows/pages.yml`.
+After this branch is merged into `main`, enable GitHub Pages in the repository settings
+and select **GitHub Actions** as the Pages source. Future pushes to `main` will deploy
+the site automatically.
