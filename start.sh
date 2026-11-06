@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
-# ⚡ yt (macOS Edition) — запуск через bash
-cd "$(dirname "$0")" || exit 1
-bash ./yt.sh "$@"
+# ==============================================================================
+#  ⚡ yt (macOS Edition) — скрипт быстрого запуска
+# ==============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+exec bash "$SCRIPT_DIR/yt.sh" "$@"

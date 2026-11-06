@@ -8,7 +8,17 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Автоматическое подключение путей Homebrew (Apple Silicon /opt/homebrew и Intel /usr/local)
-export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$HOME/.local/bin:$PATH"
+
+if command -v brew &>/dev/null; then
+    BREW_PREFIX="$(brew --prefix 2>/dev/null)"
+    if [ -n "$BREW_PREFIX" ] && [ -d "$BREW_PREFIX/bin" ]; then
+        case ":$PATH:" in
+            *":$BREW_PREFIX/bin:"*) ;;
+            *) export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/sbin:$PATH" ;;
+        esac
+    fi
+fi
 
 # Определение платформы и процессора Mac
 OS_NAME="$(uname -s 2>/dev/null || echo "Unknown")"
@@ -30,29 +40,30 @@ APPLE_COMPAT_MODE="true"    # Форсировать H.264/AAC для 100% ра�
 SOUND_ENABLED="true"
 DEBUG_MODE="false"
 
+# Определение движка JavaScript для yt-dlp (ускорение обхода YouTube player challenge)
+JS_RUNTIME_ARGS=()
+if command -v node &>/dev/null; then
+    JS_RUNTIME_ARGS=("--js-runtimes" "node")
+elif command -v deno &>/dev/null; then
+    JS_RUNTIME_ARGS=("--js-runtimes" "deno")
+fi
+
 # ------------------------------------------------------------------------------
 # Стили и Цвета (ANSI 256 / TrueColor)
 # ------------------------------------------------------------------------------
 if [ -t 1 ]; then
     BOLD='\033[1m'
     DIM='\033[2m'
-    ITALIC='\033[3m'
-    UNDERLINE='\033[4m'
-    
     RED='\033[38;5;196m'
     GREEN='\033[38;5;46m'
     YELLOW='\033[38;5;220m'
     BLUE='\033[38;5;39m'
-    MAGENTA='\033[38;5;201m'
     CYAN='\033[38;5;51m'
     WHITE='\033[38;5;231m'
     GRAY='\033[38;5;244m'
-    ORANGE='\033[38;5;208m'
     RESET='\033[0m'
 else
-    BOLD='' DIM='' ITALIC='' UNDERLINE=''
-    RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' WHITE='' GRAY='' ORANGE=''
-    RESET=''
+    BOLD='' DIM='' RED='' GREEN='' YELLOW='' BLUE='' CYAN='' WHITE='' GRAY='' RESET=''
 fi
 
 # ------------------------------------------------------------------------------
@@ -63,6 +74,18 @@ load_config() {
         # shellcheck disable=SC1090
         source "$CONFIG_FILE" 2>/dev/null || true
     fi
+
+    # Валидация и защита от некорректных значений
+    [[ "$EMBED_METADATA" =~ ^(true|false)$ ]] || EMBED_METADATA="true"
+    [[ "$EMBED_THUMBNAIL" =~ ^(true|false)$ ]] || EMBED_THUMBNAIL="true"
+    [[ "$SOUND_ENABLED" =~ ^(true|false)$ ]] || SOUND_ENABLED="true"
+    [[ "$APPLE_COMPAT_MODE" =~ ^(true|false)$ ]] || APPLE_COMPAT_MODE="true"
+    [[ "$CONCURRENT_FRAGMENTS" =~ ^[0-9]+$ ]] || CONCURRENT_FRAGMENTS="8"
+    [[ "$DEFAULT_CONTAINER" =~ ^(mp4|mkv|webm)$ ]] || DEFAULT_CONTAINER="mp4"
+    [[ "$COOKIE_BROWSER" =~ ^(none|safari|chrome|firefox)$ ]] || COOKIE_BROWSER="none"
+
+    [ -z "$DEST" ] && DEST="$DEFAULT_DEST"
+    DEST="${DEST%/}"
     mkdir -p "$DEST" 2>/dev/null || true
 }
 
@@ -86,7 +109,18 @@ EOF
 # ------------------------------------------------------------------------------
 SPINNER_PID=""
 
+stop_spinner() {
+    if [ -n "$SPINNER_PID" ] && kill -0 "$SPINNER_PID" 2>/dev/null; then
+        kill "$SPINNER_PID" 2>/dev/null
+        wait "$SPINNER_PID" 2>/dev/null || true
+    fi
+    SPINNER_PID=""
+    tput cnorm 2>/dev/null || true
+    printf "\r\033[K"
+}
+
 start_spinner() {
+    stop_spinner
     local message="$1"
     tput civis 2>/dev/null || true
     (
@@ -106,21 +140,13 @@ start_spinner() {
     SPINNER_PID=$!
 }
 
-stop_spinner() {
-    if [ -n "$SPINNER_PID" ] && kill -0 "$SPINNER_PID" 2>/dev/null; then
-        kill "$SPINNER_PID" 2>/dev/null
-        wait "$SPINNER_PID" 2>/dev/null || true
-    fi
-    SPINNER_PID=""
-    tput cnorm 2>/dev/null || true
-    printf "\r\033[K"
-}
-
 cleanup() {
     stop_spinner
     tput cnorm 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap cleanup EXIT
 
 # ------------------------------------------------------------------------------
 # Проверка и Самодиагностика зависимостей
@@ -132,8 +158,14 @@ check_dependencies() {
 
     if [ ${#missing[@]} -gt 0 ]; then
         echo -e "${RED}${BOLD}❌ На вашем компьютере не найдены обязательные утилиты:${RESET} ${missing[*]}"
+        
+        if [ ! -t 0 ]; then
+            echo -e "${YELLOW}Для автоматической установки запустите: bash install.sh${RESET}"
+            exit 1
+        fi
+
         echo -e "${YELLOW}Запустить автоматическую установку всех зависимостей? [Y/n]${RESET}"
-        read -p "> " auto_install
+        read -r -p "> " auto_install
         auto_install=${auto_install:-y}
 
         if [[ "$auto_install" =~ ^[YyДд] ]]; then
@@ -147,7 +179,6 @@ check_dependencies() {
                     exit 1
                 fi
             fi
-            
             export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.local/bin:$PATH"
             if ! command -v yt-dlp &>/dev/null; then
                 echo -e "${RED}Не удалось автоматически запустить yt-dlp. Попробуйте перезапустить терминал.${RESET}"
@@ -164,7 +195,7 @@ check_dependencies() {
 # Идеально выверенный баннер (без глитчей и сдвигов границ)
 # ------------------------------------------------------------------------------
 show_banner() {
-    clear
+    clear 2>/dev/null || true
     echo -e "${CYAN}${BOLD}"
     cat << "EOF"
    ╭──────────────────────────────────────────────────────────╮
@@ -204,18 +235,19 @@ fetch_and_display_info() {
 
     local meta
     meta=$(yt-dlp \
+        "${JS_RUNTIME_ARGS[@]}" \
         "${cookie_flag[@]}" \
         --no-warnings \
         --no-playlist \
         --skip-download \
-        --print "%(title)s	%(uploader,channel,creator)s	%(duration_string)s	%(view_count)s	%(format_note,resolution)s" \
+        --print "%(title)s	%(uploader,channel,creator)s	%(duration_string)s	%(view_count)s" \
         "$url" 2>/dev/null | head -n 1)
 
     stop_spinner
 
     if [ -n "$meta" ]; then
-        local title uploader duration views max_res
-        IFS=$'\t' read -r title uploader duration views max_res <<< "$meta"
+        local title uploader duration views
+        IFS=$'\t' read -r title uploader duration views <<< "$meta"
 
         echo -e "${BLUE}╭─ 📺 Информация о медиа ───────────────────────────────────────╮${RESET}"
         echo -e "${BLUE}│${RESET} ${BOLD}Название  :${RESET}  $title"
@@ -265,7 +297,10 @@ select_menu() {
             i=$((i + 1))
         done
         while true; do
-            read -p "Выберите номер [1-${#options[@]}]: " choice
+            local choice=""
+            if ! read -r -p "Выберите номер [1-${#options[@]}]: " choice; then
+                return 130
+            fi
             if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#options[@]}" ]; then
                 echo "${options[$((choice - 1))]}"
                 return 0
@@ -276,15 +311,9 @@ select_menu() {
 }
 
 # ------------------------------------------------------------------------------
-# Получение URL (Аргумент, буфер обмена macOS или ввод)
+# Получение URL (Буфер обмена macOS или ввод)
 # ------------------------------------------------------------------------------
 get_url() {
-    local input_url="$1"
-    if [ -n "$input_url" ]; then
-        echo "$input_url"
-        return 0
-    fi
-
     local clip_url=""
     if command -v pbpaste &>/dev/null; then
         local raw
@@ -336,14 +365,16 @@ get_url() {
     else
         if [ -n "$clip_url" ]; then
             echo -e "${CYAN}Найдена ссылка в буфере обмена Mac:${RESET} $clip_url"
-            read -p "Использовать её? [Y/n]: " use_clip
+            local use_clip=""
+            read -r -p "Использовать её? [Y/n]: " use_clip
             use_clip=${use_clip:-y}
             if [[ "$use_clip" =~ ^[YyДд] ]]; then
                 echo "$clip_url"
                 return 0
             fi
         fi
-        read -p "Вставьте ссылку на медиа: " manual_url
+        local manual_url=""
+        read -r -p "Вставьте ссылку на медиа: " manual_url
         echo "$manual_url"
     fi
 }
@@ -362,6 +393,10 @@ execute_download() {
         "--console-title"
         "--progress-template" "download:  %(progress._percent_str)s of %(progress._total_bytes_str,progress._total_bytes_estimate_str)s at %(progress._speed_str)s [ETA %(progress._eta_str)s]"
     )
+
+    if [ ${#JS_RUNTIME_ARGS[@]} -gt 0 ]; then
+        common_args+=("${JS_RUNTIME_ARGS[@]}")
+    fi
 
     # Куки браузера (для обхода ограничений YouTube/VK)
     if [ "$COOKIE_BROWSER" != "none" ]; then
@@ -437,7 +472,7 @@ menu_resolution() {
         *"720p"*)  height_limit="720" ;;
         *"480p"*)  height_limit="480" ;;
         *"360p"*)  height_limit="360" ;;
-        *) return 0 ;;
+        *) return 130 ;;
     esac
 
     local container_choice
@@ -450,7 +485,8 @@ menu_resolution() {
     case "$container_choice" in
         *"MKV"*)  container="mkv" ;;
         *"WEBM"*) container="webm" ;;
-        *)        container="mp4" ;;
+        *"MP4"*)  container="mp4" ;;
+        *)        return 130 ;;
     esac
 
     local thumb_args=()
@@ -536,7 +572,7 @@ menu_audio() {
                 -o "$DEST/%(title)s.%(ext)s"
             ;;
         *)
-            return 0
+            return 130
             ;;
     esac
 }
@@ -549,13 +585,14 @@ menu_timeslice() {
     echo ""
     echo -e "${CYAN}${BOLD}✂️ Скачивание фрагмента по таймкоду${RESET}"
     echo -e "${DIM}Примеры интервалов: 01:15-02:30 или 00:05:00-00:08:30${RESET}"
-    read -p "Введите начало и конец (ММ:СС-ММ:СС): " time_range
+    local time_range=""
+    read -r -p "Введите начало и конец (ММ:СС-ММ:СС): " time_range
     time_range=$(echo "$time_range" | tr -d ' ')
 
     if [ -z "$time_range" ]; then
         echo -e "${YELLOW}Интервал не указан.${RESET}"
         sleep 1
-        return 0
+        return 130
     fi
 
     local slice_type
@@ -581,7 +618,7 @@ menu_timeslice() {
                 -o "$DEST/%(title)s [${time_range}].%(ext)s"
             ;;
         *)
-            return 0
+            return 130
             ;;
     esac
 }
@@ -608,7 +645,8 @@ menu_playlist() {
             ;;
         *"диапазон"*)
             echo ""
-            read -p "Введите диапазон (например, 1-5 или 1,3,7): " range
+            local range=""
+            read -r -p "Введите диапазон (например, 1-5 или 1,3,7): " range
             range=$(echo "$range" | tr -d ' ')
             if [ -n "$range" ]; then
                 execute_download "$url" \
@@ -617,10 +655,12 @@ menu_playlist() {
                     -f "bestvideo+bestaudio/best" \
                     --merge-output-format "$DEFAULT_CONTAINER" \
                     -o "$DEST/%(playlist_title,playlist)s/%(playlist_index)02d - %(title)s.%(ext)s"
+            else
+                return 130
             fi
             ;;
         *)
-            return 0
+            return 130
             ;;
     esac
 }
@@ -640,14 +680,15 @@ menu_subtitles() {
 
     local lang="ru.*,ru"
     case "$choice" in
-        *"Русские"*)   lang="ru.*,ru" ;;
+        *"Русские"*)    lang="ru.*,ru" ;;
         *"Английские"*) lang="en.*,en" ;;
         *"Все"*)        lang="all" ;;
-        *) return 0 ;;
+        *)              return 130 ;;
     esac
 
     echo -e "${CYAN}Загрузка субтитров...${RESET}"
     yt-dlp \
+        "${JS_RUNTIME_ARGS[@]}" \
         --write-subs \
         --write-auto-subs \
         --sub-langs "$lang" \
@@ -655,64 +696,213 @@ menu_subtitles() {
         --skip-download \
         -o "$DEST/%(title)s.%(ext)s" \
         "$url"
-    
-    echo -e "\n${GREEN}✅ Субтитры сохранены в $DEST${RESET}"
+    local sub_status=$?
+
+    if [ $sub_status -eq 0 ]; then
+        echo -e "\n${GREEN}✅ Субтитры сохранены в $DEST${RESET}"
+    else
+        echo -e "\n${RED}❌ Ошибка при загрузке субтитров (код: $sub_status).${RESET}"
+    fi
+    return $sub_status
 }
 
 # ------------------------------------------------------------------------------
-# Диагностика системы и раскрытия M-чипов
+# Надежный поиск последнего сохраненного файла (с поддержкой пробелов и спецсимволов)
+# ------------------------------------------------------------------------------
+get_latest_file() {
+    local target_dir="$1"
+    [ ! -d "$target_dir" ] && return 1
+
+    local latest=""
+    if [ "$OS_NAME" = "Darwin" ]; then
+        latest=$(find "$target_dir" -maxdepth 1 -type f -exec stat -f "%m %N" {} + 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+    else
+        latest=$(find "$target_dir" -maxdepth 1 -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+    fi
+
+    if [ -z "$latest" ]; then
+        local simple_name
+        simple_name=$(find "$target_dir" -maxdepth 1 -type f 2>/dev/null | head -n 1)
+        latest="$simple_name"
+    fi
+
+    echo "$latest"
+}
+
+# ------------------------------------------------------------------------------
+# Единый режим диагностики и самоотладки (yt --doctor / yt --diag)
 # ------------------------------------------------------------------------------
 diagnose_system() {
-    clear
-    echo -e "${CYAN}${BOLD}🩺 ДИАГНОСТИКА ОКРУЖЕНИЯ И АППАРАТНОГО УСКОРЕНИЯ MAC${RESET}\n"
-    
-    echo -e "${WHITE}${BOLD}1. Аппаратная часть (Hardware):${RESET}"
-    echo "   • Модель процессора : $CPU_BRAND"
-    echo "   • Архитектура       : $CPU_ARCH"
-    
-    local os_ver
-    os_ver=$(sw_vers -productVersion 2>/dev/null || echo "Unknown")
-    echo "   • Версия macOS      : $os_ver"
+    local is_interactive="${1:-0}"
+    [ "$is_interactive" = "1" ] && clear 2>/dev/null || true
+
+    echo -e "${CYAN}${BOLD}╭──────────────────────────────────────────────────────────╮${RESET}"
+    echo -e "${CYAN}${BOLD}│       🩺 ДИАГНОСТИКА ОКРУЖЕНИЯ И САМООТЛАДКА (DOCTOR)    │${RESET}"
+    echo -e "${CYAN}${BOLD}╰──────────────────────────────────────────────────────────╯${RESET}\n"
+
+    local issues=()
+    local critical_failed=0
+
+    # 1. Проверка командной оболочки Bash
+    echo -e "${WHITE}${BOLD}1. Командная оболочка (Bash):${RESET}"
+    local bash_ver="${BASH_VERSION:-Unknown}"
+    echo "   • Версия Bash        : $bash_ver"
+    local bash_major="${BASH_VERSINFO[0]:-0}"
+    local bash_minor="${BASH_VERSINFO[1]:-0}"
+    if [ "$bash_major" -ge 3 ] && { [ "$bash_major" -gt 3 ] || [ "$bash_minor" -ge 2 ]; }; then
+        echo -e "   • Совместимость      : ${GREEN}✓ Поддерживается (Bash 3.2+ / macOS native)${RESET}"
+    else
+        echo -e "   • Совместимость      : ${RED}✗ Устаревшая версия Bash (< 3.2)${RESET}"
+        issues+=("1. Что неисправно: Версия Bash ($bash_ver) ниже минимально необходимой 3.2.\n   2. Причина: Запуск скрипта в устаревшем командном интерпретаторе.\n   3. Как исправить: Запустите через стандартный /bin/bash: /bin/bash yt.sh\n   4. Повторная проверка: yt --doctor")
+        critical_failed=1
+    fi
     echo ""
 
-    echo -e "${WHITE}${BOLD}2. Мультимедиа и кодеки (FFmpeg & VideoToolbox):${RESET}"
+    # 2. Аппаратная платформа и операционная система
+    echo -e "${WHITE}${BOLD}2. Аппаратная платформа и ОС:${RESET}"
+    echo "   • Модель процессора  : $CPU_BRAND"
+    echo "   • Архитектура        : $CPU_ARCH"
+    local os_ver
+    os_ver=$(sw_vers -productVersion 2>/dev/null || echo "Unknown")
+    echo "   • Версия системы     : $OS_NAME $os_ver"
+    echo ""
+
+    # 3. Загрузчик yt-dlp
+    echo -e "${WHITE}${BOLD}3. Загрузчик медиа (yt-dlp):${RESET}"
+    if command -v yt-dlp &>/dev/null; then
+        local ytdlp_path ytdlp_ver
+        ytdlp_path="$(command -v yt-dlp)"
+        ytdlp_ver="$(yt-dlp --version 2>/dev/null || echo "Error")"
+        echo "   • Путь к бинарнику   : $ytdlp_path"
+        echo -e "   • Версия             : ${GREEN}$ytdlp_ver${RESET}"
+        if [ -x "$ytdlp_path" ]; then
+            echo -e "   • Права запуска      : ${GREEN}✓ Исполняемый${RESET}"
+        else
+            echo -e "   • Права запуска      : ${RED}✗ Нет прав на исполнение (+x)${RESET}"
+            issues+=("1. Что неисправно: Файл yt-dlp не имеет прав на запуск.\n   2. Причина: Не установлены флаги исполнения.\n   3. Как исправить: chmod +x \"$ytdlp_path\"\n   4. Повторная проверка: yt --doctor")
+            critical_failed=1
+        fi
+    else
+        echo -e "   • Статус             : ${RED}✗ НЕ УСТАНОВЛЕН!${RESET}"
+        issues+=("1. Что неисправно: yt-dlp не найден в системных путях PATH.\n   2. Причина: Утилита не установлена или путь к ней отсутствует в PATH.\n   3. Как исправить: Выполните 'bash install.sh' или 'brew install yt-dlp'.\n   4. Повторная проверка: yt --doctor")
+        critical_failed=1
+    fi
+    echo ""
+
+    # 4. Мультимедиа-движок (FFmpeg и ffprobe)
+    echo -e "${WHITE}${BOLD}4. Мультимедиа-движок (FFmpeg & ffprobe):${RESET}"
     if command -v ffmpeg &>/dev/null; then
         local ff_ver
         ff_ver=$(ffmpeg -version 2>/dev/null | head -n 1)
-        echo "   • FFmpeg путь       : $(which ffmpeg)"
-        echo "   • FFmpeg сборка     : $ff_ver"
+        echo "   • FFmpeg путь        : $(command -v ffmpeg)"
+        echo "   • FFmpeg сборка      : $ff_ver"
         if ffmpeg -hwaccels 2>/dev/null | grep -q "videotoolbox"; then
-            echo -e "   • VideoToolbox      : ${GREEN}✓ ВКЛЮЧЕНО (Apple Hardware Acceleration активен)${RESET}"
+            echo -e "   • VideoToolbox       : ${GREEN}✓ ВКЛЮЧЕНО (Apple Hardware Acceleration активен)${RESET}"
         else
-            echo -e "   • VideoToolbox      : ${YELLOW}Software (CPU)${RESET}"
+            echo -e "   • VideoToolbox       : ${YELLOW}ℹ️ Software (CPU)${RESET}"
         fi
     else
-        echo -e "   • FFmpeg            : ${RED}Не установлен!${RESET}"
+        echo -e "   • FFmpeg             : ${RED}✗ НЕ УСТАНОВЛЕН!${RESET}"
+        issues+=("1. Что неисправно: FFmpeg не найден.\n   2. Причина: Без FFmpeg невозможно объединять аудио/видео 1080p/4K и конвертировать MP3.\n   3. Как исправить: Выполните 'brew install ffmpeg' или 'bash install.sh'.\n   4. Повторная проверка: yt --doctor")
+        critical_failed=1
     fi
-    echo ""
 
-    echo -e "${WHITE}${BOLD}3. Загрузчик yt-dlp:${RESET}"
-    if command -v yt-dlp &>/dev/null; then
-        echo "   • yt-dlp путь       : $(which yt-dlp)"
-        echo "   • yt-dlp версия     : $(yt-dlp --version)"
+    if command -v ffprobe &>/dev/null; then
+        echo -e "   • ffprobe            : ${GREEN}✓ Доступен ($(command -v ffprobe))${RESET}"
     else
-        echo -e "   • yt-dlp            : ${RED}Не установлен!${RESET}"
+        echo -e "   • ffprobe            : ${YELLOW}⚠️ Не найден (рекомендуется для анализа потоков)${RESET}"
     fi
     echo ""
 
-    echo -e "${WHITE}${BOLD}4. Дисковая подсистема:${RESET}"
-    echo "   • Папка загрузки    : $DEST"
+    # 5. Интерактивный селектор (fzf - опционально)
+    echo -e "${WHITE}${BOLD}5. Интерактивный интерфейс (fzf):${RESET}"
+    if command -v fzf &>/dev/null; then
+        local fzf_ver
+        fzf_ver=$(fzf --version 2>/dev/null | head -n 1)
+        echo -e "   • Статус             : ${GREEN}✓ Установлен ($fzf_ver)${RESET}"
+    else
+        echo -e "   • Статус             : ${YELLOW}ℹ️ Не установлен (активен встроенный режим нумерованного меню)${RESET}"
+    fi
+    echo ""
+
+    # 6. Пакетный менеджер и внешние компоненты
+    echo -e "${WHITE}${BOLD}6. Системные компоненты и пакетный менеджер:${RESET}"
+    if [ "$OS_NAME" = "Darwin" ]; then
+        if command -v brew &>/dev/null; then
+            echo -e "   • Homebrew           : ${GREEN}✓ Обнаружен ($(command -v brew))${RESET}"
+        else
+            echo -e "   • Homebrew           : ${YELLOW}⚠️ Не найден (/opt/homebrew или /usr/local)${RESET}"
+        fi
+        command -v osascript &>/dev/null && echo -e "   • Уведомления macOS  : ${GREEN}✓ osascript доступен${RESET}" || echo -e "   • Уведомления macOS  : ${GRAY}✗ недоступно${RESET}"
+        command -v afplay &>/dev/null && echo -e "   • Звуки macOS        : ${GREEN}✓ afplay доступен${RESET}" || echo -e "   • Звуки macOS        : ${GRAY}✗ недоступно${RESET}"
+        command -v pbpaste &>/dev/null && echo -e "   • Буфер обмена macOS : ${GREEN}✓ pbpaste доступен${RESET}" || echo -e "   • Буфер обмена macOS : ${GRAY}✗ недоступно${RESET}"
+    else
+        echo -e "   • Linux Package Mgr  : $(command -v apt-get || command -v pacman || command -v dnf || echo 'None')"
+    fi
+    if command -v node &>/dev/null; then
+        echo -e "   • JavaScript Engine  : ${GREEN}✓ Node.js ($(node -v 2>/dev/null)) [Решение JS challenge YouTube]${RESET}"
+    elif command -v deno &>/dev/null; then
+        echo -e "   • JavaScript Engine  : ${GREEN}✓ Deno [Решение JS challenge YouTube]${RESET}"
+    else
+        echo -e "   • JavaScript Engine  : ${YELLOW}ℹ️ Не найден (рекомендуется node для максимальной скорости)${RESET}"
+    fi
+    echo ""
+
+    # 7. Дисковая подсистема и права доступа
+    echo -e "${WHITE}${BOLD}7. Дисковая подсистема:${RESET}"
+    echo "   • Папка загрузки     : $DEST"
+    mkdir -p "$DEST" 2>/dev/null || true
     if [ -w "$DEST" ]; then
-        echo -e "   • Права на запись   : ${GREEN}✓ Доступно${RESET}"
+        echo -e "   • Права на запись    : ${GREEN}✓ Доступно${RESET}"
         local free_space
         free_space=$(df -h "$DEST" 2>/dev/null | awk 'NR==2 {print $4}')
-        echo "   • Свободно места    : $free_space"
+        echo -e "   • Свободно места     : ${GREEN}$free_space${RESET}"
     else
-        echo -e "   • Права на запись   : ${RED}✗ Запрещено! Проверьте папку.${RESET}"
+        echo -e "   • Права на запись    : ${RED}✗ ЗАПРЕЩЕНО! Проверьте права на директорию.${RESET}"
+        issues+=("1. Что неисправно: Нет прав на запись в целевую папку: $DEST\n   2. Причина: Директория защищена правами или принадлежит root.\n   3. Как исправить: mkdir -p \"$DEST\" && chmod u+w \"$DEST\"\n   4. Повторная проверка: yt --doctor")
+        critical_failed=1
     fi
     echo ""
 
-    read -p "Нажмите Enter для возврата в меню..." _
+    # 8. Конфигурация проекта
+    echo -e "${WHITE}${BOLD}8. Конфигурация ($CONFIG_FILE):${RESET}"
+    if [ -f "$CONFIG_FILE" ]; then
+        if bash -n "$CONFIG_FILE" 2>/dev/null; then
+            echo -e "   • Синтаксис файла    : ${GREEN}✓ Корректный${RESET}"
+        else
+            echo -e "   • Синтаксис файла    : ${RED}✗ Ошибка синтаксиса в config.env!${RESET}"
+            issues+=("1. Что неисправно: Файл настроек поврежден: $CONFIG_FILE\n   2. Причина: Некорректный синтаксис переменных bash.\n   3. Как исправить: Удалите файл конфигурации 'rm \"$CONFIG_FILE\"' для сброса на дефолты.\n   4. Повторная проверка: yt --doctor")
+        fi
+    else
+        echo -e "   • Файл конфигурации  : ${GRAY}Будет автоматически создан при первом сохранении настроек${RESET}"
+    fi
+    echo ""
+
+    # Итог проверки
+    if [ ${#issues[@]} -eq 0 ]; then
+        echo -e "${GREEN}${BOLD}═════════════════════════════════════════════════════════════${RESET}"
+        echo -e "${GREEN}${BOLD}✅ Все обязательные компоненты и окружение настроены идеально!${RESET}"
+        echo -e "${GREEN}${BOLD}═════════════════════════════════════════════════════════════${RESET}\n"
+    else
+        echo -e "${RED}${BOLD}═════════════════════════════════════════════════════════════${RESET}"
+        echo -e "${RED}${BOLD}⚠️ ОБНАРУЖЕНЫ ПРОБЛЕМЫ (${#issues[@]}):${RESET}\n"
+        local idx=1
+        for issue in "${issues[@]}"; do
+            echo -e "${YELLOW}[Проблема #$idx]${RESET}"
+            echo -e "$issue"
+            echo ""
+            idx=$((idx + 1))
+        done
+        echo -e "${CYAN}Команда для повторного аудита: ${BOLD}yt --doctor${RESET}"
+        echo -e "${RED}${BOLD}═════════════════════════════════════════════════════════════${RESET}\n"
+    fi
+
+    if [ "$is_interactive" = "1" ]; then
+        local _dummy=""
+        read -r -p "Нажмите Enter для возврата в меню..." _dummy
+    fi
+
+    return $critical_failed
 }
 
 # ------------------------------------------------------------------------------
@@ -741,7 +931,7 @@ menu_settings() {
             "🍪 Куки браузера для закрытых видео : [$COOKIE_BROWSER]" \
             "⚡ Потоков скачивания : [$CONCURRENT_FRAGMENTS]" \
             "🔊 Звук завершения : [$sound_status]" \
-            "🩺 Диагностика Mac и VideoToolbox" \
+            "🩺 Диагностика Mac и VideoToolbox (Doctor)" \
             "🔄 Обновить yt-dlp" \
             "↩️  Назад в главное меню")
 
@@ -749,12 +939,18 @@ menu_settings() {
             *"Папка сохранения"*)
                 echo ""
                 echo -e "Текущая папка: ${CYAN}$DEST${RESET}"
-                read -p "Введите новый путь: " new_dest
+                local new_dest=""
+                read -r -p "Введите новый путь: " new_dest
                 if [ -n "$new_dest" ]; then
                     new_dest="${new_dest/#\~/$HOME}"
-                    mkdir -p "$new_dest" 2>/dev/null && DEST="$new_dest"
-                    save_config
-                    echo -e "${GREEN}✓ Папка обновлена!${RESET}"
+                    new_dest="${new_dest%/}"
+                    if mkdir -p "$new_dest" 2>/dev/null; then
+                        DEST="$new_dest"
+                        save_config
+                        echo -e "${GREEN}✓ Папка обновлена!${RESET}"
+                    else
+                        echo -e "${RED}❌ Не удалось создать указанную папку.${RESET}"
+                    fi
                     sleep 1
                 fi
                 ;;
@@ -797,16 +993,16 @@ menu_settings() {
                 save_config
                 ;;
             *"Диагностика"*)
-                diagnose_system
+                diagnose_system 1
                 ;;
             *"Обновить yt-dlp"*)
                 echo -e "\n${CYAN}Проверка обновлений yt-dlp...${RESET}"
                 if command -v brew &>/dev/null; then
-                    brew upgrade yt-dlp || yt-dlp -U
+                    brew upgrade yt-dlp || yt-dlp -U || true
                 else
-                    yt-dlp -U
+                    yt-dlp -U || true
                 fi
-                echo -e "${GREEN}✓ Готово!${RESET}"
+                echo -e "${GREEN}✓ Проверка обновлений завершена!${RESET}"
                 sleep 2
                 ;;
             *)
@@ -841,14 +1037,14 @@ post_download_menu() {
             return 0
             ;;
         *"Finder"*)
-            open "$DEST"
+            open "$DEST" 2>/dev/null || xdg-open "$DEST" 2>/dev/null || true
             post_download_menu "$status"
             ;;
         *"Воспроизвести"*)
             local latest_file
-            latest_file=$(ls -t "$DEST" 2>/dev/null | head -n 1)
-            if [ -n "$latest_file" ] && [ -f "$DEST/$latest_file" ]; then
-                open "$DEST/$latest_file"
+            latest_file="$(get_latest_file "$DEST")"
+            if [ -n "$latest_file" ] && [ -f "$latest_file" ]; then
+                open "$latest_file" 2>/dev/null || xdg-open "$latest_file" 2>/dev/null || true
             else
                 echo -e "${YELLOW}Файл не найден.${RESET}"
             fi
@@ -865,6 +1061,8 @@ post_download_menu() {
 # Главный цикл программы
 # ------------------------------------------------------------------------------
 main() {
+    local initial_url=""
+
     # Обработка аргументов командной строки
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -873,7 +1071,7 @@ main() {
                 echo -e "${BOLD}Использование:${RESET}"
                 echo "  yt                       # Интерактивное меню (с автоподхватом из буфера macOS)"
                 echo "  yt <URL>                 # Запуск сразу с указанной ссылкой"
-                echo "  yt --diag                # Диагностика Mac, M-процессора и VideoToolbox"
+                echo "  yt --doctor | --diag     # Диагностика системы, VideoToolbox и окружения"
                 echo "  yt -h | --help           # Показать эту справку"
                 echo ""
                 echo -e "${BOLD}Особенности macOS:${RESET}"
@@ -883,24 +1081,26 @@ main() {
                 echo "  • Поддержка Safari/Chrome куков для загрузки приватных видео"
                 exit 0
                 ;;
-            --diag)
-                diagnose_system
-                exit 0
+            --doctor|--diag)
+                load_config
+                diagnose_system 0
+                exit $?
                 ;;
             --debug|-d)
                 DEBUG_MODE="true"
                 shift
                 ;;
             *)
-                break
+                if [ -z "$initial_url" ]; then
+                    initial_url="$1"
+                fi
+                shift
                 ;;
         esac
     done
 
     check_dependencies
     load_config
-
-    local initial_url="$1"
 
     while true; do
         show_banner
@@ -912,6 +1112,8 @@ main() {
         else
             URL=$(get_url)
         fi
+
+        URL=$(echo "$URL" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
         if [ -z "$URL" ]; then
             echo -e "${GREEN}До встречи! 👋${RESET}"
@@ -941,9 +1143,11 @@ main() {
         fi
 
         local last_status=0
+        local download_attempted=false
 
         case "$ACTION" in
             *"Максимальное качество"*)
+                download_attempted=true
                 execute_download "$URL" \
                     --no-playlist \
                     -f "bestvideo+bestaudio/best" \
@@ -954,6 +1158,7 @@ main() {
                 ;;
 
             *"Сразу MP3"*)
+                download_attempted=true
                 execute_download "$URL" \
                     --no-playlist \
                     -x \
@@ -965,6 +1170,7 @@ main() {
                 ;;
 
             *"Минимальный вес"*)
+                download_attempted=true
                 execute_download "$URL" \
                     --no-playlist \
                     -f "worstvideo+worstaudio/worst" \
@@ -976,45 +1182,61 @@ main() {
             *"Выбрать точное разрешение"*)
                 menu_resolution "$URL"
                 last_status=$?
+                [ $last_status -eq 130 ] && continue
+                download_attempted=true
                 ;;
 
             *"Другие аудиоформаты"*)
                 menu_audio "$URL"
                 last_status=$?
+                [ $last_status -eq 130 ] && continue
+                download_attempted=true
                 ;;
 
             *"Скачать конкретный отрезок"*)
                 menu_timeslice "$URL"
                 last_status=$?
+                [ $last_status -eq 130 ] && continue
+                download_attempted=true
                 ;;
 
             *"Загрузить плейлист"*)
                 menu_playlist "$URL"
                 last_status=$?
+                [ $last_status -eq 130 ] && continue
+                download_attempted=true
                 ;;
 
             *"Показать форматы"*)
                 echo ""
-                yt-dlp -F "$URL"
+                yt-dlp "${JS_RUNTIME_ARGS[@]}" -F "$URL"
                 echo ""
-                read -p "Введите ID формата (например, 137+140 или best, Enter для отмены): " custom_format
+                local custom_format=""
+                read -r -p "Введите ID формата (например, 137+140 или best, Enter для отмены): " custom_format
                 custom_format=$(echo "$custom_format" | tr -d ' ')
                 if [ -n "$custom_format" ]; then
+                    download_attempted=true
                     execute_download "$URL" \
                         -f "$custom_format" \
                         -o "$DEST/%(title)s.%(ext)s"
                     last_status=$?
+                else
+                    continue
                 fi
                 ;;
 
             *"Скачать субтитры"*)
                 menu_subtitles "$URL"
                 last_status=$?
+                [ $last_status -eq 130 ] && continue
+                download_attempted=true
                 ;;
 
             *"только обложку"*)
+                download_attempted=true
                 echo -e "${CYAN}Загрузка обложки...${RESET}"
                 yt-dlp \
+                    "${JS_RUNTIME_ARGS[@]}" \
                     --write-thumbnail \
                     --skip-download \
                     --convert-thumbnails jpg \
@@ -1037,7 +1259,9 @@ main() {
                 ;;
         esac
 
-        post_download_menu "$last_status"
+        if [ "$download_attempted" = "true" ]; then
+            post_download_menu "$last_status"
+        fi
     done
 }
 
