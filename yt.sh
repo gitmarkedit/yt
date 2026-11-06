@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  ⚡ YT-DLP ULTIMATE DOWNLOADER
-#  Интерактивный, быстрый и стильный скрипт загрузки медиа
+#  ⚡ YT-DLP ULTIMATE DOWNLOADER (macOS & Apple Silicon Edition)
+#  Высокопроизводительный медиа-загрузчик с аппаратным ускорением VideoToolbox
 # ==============================================================================
 
 # Определение директории скрипта
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Совместимость с macOS и путями (включая локальную папку bin/ внутри проекта)
+# Автоматическое подключение путей Homebrew (Apple Silicon /opt/homebrew и Intel /usr/local)
 export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
-# Настройки по умолчанию и пути
+# Определение платформы и процессора Mac
+OS_NAME="$(uname -s 2>/dev/null || echo "Unknown")"
+CPU_ARCH="$(uname -m 2>/dev/null || echo "Unknown")"
+CPU_BRAND="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "$CPU_ARCH")"
+
+# Конфигурация и пути по умолчанию
 CONFIG_DIR="$HOME/.config/yt-downloader"
 CONFIG_FILE="$CONFIG_DIR/config.env"
 DEFAULT_DEST="$HOME/Downloads/Media"
@@ -19,16 +24,21 @@ DEST="$DEFAULT_DEST"
 EMBED_METADATA="true"
 EMBED_THUMBNAIL="true"
 DEFAULT_CONTAINER="mp4"
-CONCURRENT_FRAGMENTS="4"
-NOTIFY_SOUND="Glass"
+CONCURRENT_FRAGMENTS="8"     # На Apple Silicon 8 потоков дают максимальную утилизацию сети
+COOKIE_BROWSER="none"       # none, safari, chrome, firefox
+APPLE_COMPAT_MODE="true"    # Форсировать H.264/AAC для 100% работы в QuickTime & Finder QuickLook
+SOUND_ENABLED="true"
+DEBUG_MODE="false"
 
 # ------------------------------------------------------------------------------
-# Стили и Цвета (ANSI)
+# Стили и Цвета (ANSI 256 / TrueColor)
 # ------------------------------------------------------------------------------
 if [ -t 1 ]; then
     BOLD='\033[1m'
     DIM='\033[2m'
     ITALIC='\033[3m'
+    UNDERLINE='\033[4m'
+    
     RED='\033[38;5;196m'
     GREEN='\033[38;5;46m'
     YELLOW='\033[38;5;220m'
@@ -37,24 +47,16 @@ if [ -t 1 ]; then
     CYAN='\033[38;5;51m'
     WHITE='\033[38;5;231m'
     GRAY='\033[38;5;244m'
+    ORANGE='\033[38;5;208m'
     RESET='\033[0m'
 else
-    BOLD=''
-    DIM=''
-    ITALIC=''
-    RED=''
-    GREEN=''
-    YELLOW=''
-    BLUE=''
-    MAGENTA=''
-    CYAN=''
-    WHITE=''
-    GRAY=''
+    BOLD='' DIM='' ITALIC='' UNDERLINE=''
+    RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' WHITE='' GRAY='' ORANGE=''
     RESET=''
 fi
 
 # ------------------------------------------------------------------------------
-# Конфигурация
+# Управление конфигурацией
 # ------------------------------------------------------------------------------
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
@@ -73,50 +75,14 @@ EMBED_METADATA="$EMBED_METADATA"
 EMBED_THUMBNAIL="$EMBED_THUMBNAIL"
 DEFAULT_CONTAINER="$DEFAULT_CONTAINER"
 CONCURRENT_FRAGMENTS="$CONCURRENT_FRAGMENTS"
+COOKIE_BROWSER="$COOKIE_BROWSER"
+APPLE_COMPAT_MODE="$APPLE_COMPAT_MODE"
+SOUND_ENABLED="$SOUND_ENABLED"
 EOF
 }
 
 # ------------------------------------------------------------------------------
-# Проверка зависимостей с автоматической установкой
-# ------------------------------------------------------------------------------
-check_dependencies() {
-    local missing=()
-    command -v yt-dlp &>/dev/null || missing+=("yt-dlp")
-    command -v ffmpeg &>/dev/null || missing+=("ffmpeg")
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo -e "${RED}${BOLD}❌ На вашем компьютере не найдены обязательные утилиты:${RESET} ${missing[*]}"
-        echo -e "${YELLOW}Запустить автоматическую установку всех зависимостей прямо сейчас? [Y/n]${RESET}"
-        read -p "> " auto_install
-        auto_install=${auto_install:-y}
-
-        if [[ "$auto_install" =~ ^[YyДд] ]]; then
-            if [ -f "$SCRIPT_DIR/install.sh" ]; then
-                bash "$SCRIPT_DIR/install.sh"
-            else
-                if command -v brew &>/dev/null; then
-                    brew install "${missing[@]}" fzf || true
-                else
-                    echo -e "${RED}Установите Homebrew или запустите install.sh вручную.${RESET}"
-                    exit 1
-                fi
-            fi
-            
-            # Повторная проверка
-            export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.local/bin:$PATH"
-            if ! command -v yt-dlp &>/dev/null; then
-                echo -e "${RED}Не удалось автоматически запустить yt-dlp. Попробуйте перезапустить терминал.${RESET}"
-                exit 1
-            fi
-        else
-            echo -e "${YELLOW}Для работы скрипта требуются yt-dlp и ffmpeg. Установка отменена.${RESET}"
-            exit 1
-        fi
-    fi
-}
-
-# ------------------------------------------------------------------------------
-# Анимации: Спиннер и Очистка
+# Анимации: Спиннер и Управление курсором
 # ------------------------------------------------------------------------------
 SPINNER_PID=""
 
@@ -125,11 +91,16 @@ start_spinner() {
     tput civis 2>/dev/null || true
     (
         local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+        local colors=("\033[38;5;51m" "\033[38;5;45m" "\033[38;5;39m" "\033[38;5;33m" "\033[38;5;27m" "\033[38;5;33m" "\033[38;5;39m" "\033[38;5;45m")
         local i=0
+        local start_sec=$SECONDS
         while true; do
-            printf "\r${CYAN}%s${RESET} %s" "${frames[i]}" "$message"
-            i=$(( (i + 1) % 10 ))
-            sleep 0.08
+            local elapsed=$(( SECONDS - start_sec ))
+            local c_idx=$(( i % ${#colors[@]} ))
+            local col="${colors[c_idx]}"
+            printf "\r${col}%s${RESET} [%02d:%02d] %s" "${frames[i]}" "$((elapsed / 60))" "$((elapsed % 60))" "$message"
+            i=$(( (i + 1) % ${#frames[@]} ))
+            sleep 0.07
         done
     ) &
     SPINNER_PID=$!
@@ -152,53 +123,120 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ------------------------------------------------------------------------------
-# Визуальные элементы (Баннер, Карточка видео)
+# Проверка и Самодиагностика зависимостей
+# ------------------------------------------------------------------------------
+check_dependencies() {
+    local missing=()
+    command -v yt-dlp &>/dev/null || missing+=("yt-dlp")
+    command -v ffmpeg &>/dev/null || missing+=("ffmpeg")
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${RED}${BOLD}❌ На вашем компьютере не найдены обязательные утилиты:${RESET} ${missing[*]}"
+        echo -e "${YELLOW}Запустить автоматическую установку всех зависимостей? [Y/n]${RESET}"
+        read -p "> " auto_install
+        auto_install=${auto_install:-y}
+
+        if [[ "$auto_install" =~ ^[YyДд] ]]; then
+            if [ -f "$SCRIPT_DIR/install.sh" ]; then
+                bash "$SCRIPT_DIR/install.sh"
+            else
+                if command -v brew &>/dev/null; then
+                    brew install "${missing[@]}" fzf || true
+                else
+                    echo -e "${RED}Homebrew не найден. Установите yt-dlp и ffmpeg вручную.${RESET}"
+                    exit 1
+                fi
+            fi
+            
+            export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.local/bin:$PATH"
+            if ! command -v yt-dlp &>/dev/null; then
+                echo -e "${RED}Не удалось автоматически запустить yt-dlp. Попробуйте перезапустить терминал.${RESET}"
+                exit 1
+            fi
+        else
+            echo -e "${YELLOW}Для работы скрипта требуются yt-dlp и ffmpeg.${RESET}"
+            exit 1
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Аппаратный статус и Баннер
 # ------------------------------------------------------------------------------
 show_banner() {
     clear
     echo -e "${CYAN}${BOLD}"
     cat << "EOF"
    ╭─────────────────────────────────────────────────────────────╮
-   │           ⚡  Y T - D L P   U L T I M A T E  ⚡             │
-   │       Интерактивный медиа-загрузчик нового поколения       │
+   │        ⚡  Y T - D L P   U L T I M A T E   [macOS]          │
+   │       Высокоскоростная загрузка с аппаратным медиа-ядром     │
    ╰─────────────────────────────────────────────────────────────╯
 EOF
     echo -e "${RESET}"
+
+    # Определение чипа и аппаратного ускорения
+    local hw_accel_info=""
+    if [ "$OS_NAME" = "Darwin" ]; then
+        if ffmpeg -hwaccels 2>/dev/null | grep -q "videotoolbox"; then
+            hw_accel_info="${GREEN}VideoToolbox [Hardware Accelerated]${RESET}"
+        else
+            hw_accel_info="${YELLOW}Software (CPU)${RESET}"
+        fi
+        echo -e "  ${GRAY} Платформа :${RESET} ${WHITE}${BOLD}$CPU_BRAND${RESET} (${CYAN}$CPU_ARCH${RESET})"
+        echo -e "  ${GRAY}⚡ Движок   :${RESET} $hw_accel_info  ${GRAY}• Потоков:${RESET} ${CYAN}${CONCURRENT_FRAGMENTS}${RESET}"
+    else
+        echo -e "  ${GRAY}Система   :${RESET} ${WHITE}$OS_NAME ($CPU_ARCH)${RESET}"
+    fi
+    echo ""
 }
 
+# ------------------------------------------------------------------------------
+# Карточка информации о медиа
+# ------------------------------------------------------------------------------
 fetch_and_display_info() {
     local url="$1"
-    start_spinner "Получение информации о медиа..."
+    start_spinner "Анализ медиа и проверка доступных разрешений..."
+
+    local cookie_flag=()
+    if [ "$COOKIE_BROWSER" != "none" ]; then
+        cookie_flag=("--cookies-from-browser" "$COOKIE_BROWSER")
+    fi
 
     local meta
     meta=$(yt-dlp \
+        "${cookie_flag[@]}" \
         --no-warnings \
         --no-playlist \
         --skip-download \
-        --print "%(title)s	%(uploader,channel,creator)s	%(duration_string)s	%(view_count)s" \
+        --print "%(title)s	%(uploader,channel,creator)s	%(duration_string)s	%(view_count)s	%(format_note,resolution)s" \
         "$url" 2>/dev/null | head -n 1)
 
     stop_spinner
 
     if [ -n "$meta" ]; then
-        local title uploader duration views
-        IFS=$'\t' read -r title uploader duration views <<< "$meta"
+        local title uploader duration views max_res
+        IFS=$'\t' read -r title uploader duration views max_res <<< "$meta"
 
         echo -e "${BLUE}╭─ 📺 Информация о медиа ───────────────────────────────────────╮${RESET}"
-        echo -e "${BLUE}│${RESET} ${BOLD}Название:${RESET}  $title"
+        echo -e "${BLUE}│${RESET} ${BOLD}Название  :${RESET}  $title"
         [ -n "$uploader" ] && [ "$uploader" != "NA" ] && \
-        echo -e "${BLUE}│${RESET} ${DIM}Автор:${RESET}     $uploader"
+        echo -e "${BLUE}│${RESET} ${DIM}Автор     :${RESET}  $uploader"
         [ -n "$duration" ] && [ "$duration" != "NA" ] && \
-        echo -e "${BLUE}│${RESET} ${DIM}Время:${RESET}     $duration"
+        echo -e "${BLUE}│${RESET} ${DIM}Время     :${RESET}  $duration"
         [ -n "$views" ] && [ "$views" != "NA" ] && \
-        echo -e "${BLUE}│${RESET} ${DIM}Просмотры:${RESET} $views"
+        echo -e "${BLUE}│${RESET} ${DIM}Просмотры :${RESET}  $views"
+        if [ "$APPLE_COMPAT_MODE" = "true" ]; then
+            echo -e "${BLUE}│${RESET} ${GREEN} Совместимость:${RESET} QuickTime, QuickLook (Пробел) & iPhone (H.264/AAC)"
+        fi
         echo -e "${BLUE}╰───────────────────────────────────────────────────────────────╯${RESET}"
         echo ""
+    else
+        echo -e "${YELLOW}⚠️ Не удалось извлечь предпросмотр (возможно, закрытое видео или плейлист).${RESET}\n"
     fi
 }
 
 # ------------------------------------------------------------------------------
-# Меню выбора (FZF с фоллбэком на чистый Bash)
+# Меню выбора (FZF с автоподстройкой или встроенный fallback)
 # ------------------------------------------------------------------------------
 select_menu() {
     local prompt="$1"
@@ -237,7 +275,7 @@ select_menu() {
 }
 
 # ------------------------------------------------------------------------------
-# Получение URL (Аргумент, буфер обмена или ввод)
+# Получение URL (Аргумент, буфер обмена macOS или ввод)
 # ------------------------------------------------------------------------------
 get_url() {
     local input_url="$1"
@@ -258,7 +296,7 @@ get_url() {
     if command -v fzf &>/dev/null; then
         local prompt_list=""
         if [ -n "$clip_url" ]; then
-            prompt_list="📋 Использовать из буфера: $clip_url"
+            prompt_list="📋 Использовать из буфера macOS: $clip_url"
         fi
 
         local res
@@ -267,7 +305,7 @@ get_url() {
             --height=7 \
             --layout=reverse \
             --border=rounded \
-            --prompt="URL > " \
+            --prompt="Ссылка > " \
             --header="Вставьте ссылку и нажмите Enter (Esc - выход):" \
             --color="prompt:cyan,pointer:magenta,header:yellow,border:blue")
 
@@ -278,7 +316,7 @@ get_url() {
         typed_query=$(echo "$res" | sed -n '1p')
         selected_item=$(echo "$res" | sed -n '2p')
 
-        if [[ "$selected_item" =~ ^📋\ Использовать\ из\ буфера:\ (https?://.+) ]]; then
+        if [[ "$selected_item" =~ ^📋\ Использовать\ из\ буфера\ macOS:\ (https?://.+) ]]; then
             echo "${BASH_REMATCH[1]}"
         elif [ -n "$typed_query" ]; then
             echo "$typed_query"
@@ -287,7 +325,7 @@ get_url() {
         fi
     else
         if [ -n "$clip_url" ]; then
-            echo -e "${CYAN}Найдена ссылка в буфере обмена:${RESET} $clip_url"
+            echo -e "${CYAN}Найдена ссылка в буфере обмена Mac:${RESET} $clip_url"
             read -p "Использовать её? [Y/n]: " use_clip
             use_clip=${use_clip:-y}
             if [[ "$use_clip" =~ ^[YyДд] ]]; then
@@ -295,13 +333,13 @@ get_url() {
                 return 0
             fi
         fi
-        read -p "Вставьте ссылку на видео/аудио: " manual_url
+        read -p "Вставьте ссылку на медиа: " manual_url
         echo "$manual_url"
     fi
 }
 
 # ------------------------------------------------------------------------------
-# Запуск загрузки с общими параметрами
+# Запуск загрузки с аппаратной оптимизацией под macOS
 # ------------------------------------------------------------------------------
 execute_download() {
     local url="$1"
@@ -312,13 +350,32 @@ execute_download() {
         "--no-mtime"
         "-N" "$CONCURRENT_FRAGMENTS"
         "--console-title"
+        "--progress-template" "download:  %(progress._percent_str)s of %(progress._total_bytes_str,progress._total_bytes_estimate_str)s at %(progress._speed_str)s [ETA %(progress._eta_str)s]"
     )
 
+    # Куки браузера (для обхода ограничений YouTube/VK)
+    if [ "$COOKIE_BROWSER" != "none" ]; then
+        common_args+=("--cookies-from-browser" "$COOKIE_BROWSER")
+    fi
+
+    # Вшивание метаданных и глав для Apple экосистемы
     if [ "$EMBED_METADATA" = "true" ]; then
         common_args+=("--embed-metadata" "--embed-chapters")
     fi
 
-    echo -e "${CYAN}🚀 Запуск загрузки...${RESET}\n"
+    # QuickTime / Finder QuickLook оптимизация (быстрый старт видео без задержек)
+    common_args+=("--postprocessor-args" "Merger:-movflags +faststart")
+
+    # Сортировка форматов под кодеки Apple Silicon (H.264/HEVC)
+    if [ "$APPLE_COMPAT_MODE" = "true" ]; then
+        common_args+=("-S" "vcodec:h264,vcodec:hevc,lang,quality,res,fps")
+    fi
+
+    if [ "$DEBUG_MODE" = "true" ]; then
+        echo -e "${YELLOW}[DEBUG] Команда yt-dlp:${RESET} yt-dlp ${common_args[*]} ${extra_args[*]} $url\n"
+    fi
+
+    echo -e "${CYAN}🚀 Запуск загрузки на максимальной скорости...${RESET}\n"
 
     yt-dlp "${common_args[@]}" "${extra_args[@]}" "$url"
     local dl_status=$?
@@ -330,9 +387,14 @@ execute_download() {
         echo -e "${GREEN}│${RESET}  📁 Папка: ${CYAN}$DEST${RESET}"
         echo -e "${GREEN}${BOLD}╰─────────────────────────────────────────────────────────────╯${RESET}"
 
+        # Звуковой сигнал macOS (приятный системный Glass)
+        if [ "$SOUND_ENABLED" = "true" ] && [ -f "/System/Library/Sounds/Glass.aiff" ]; then
+            afplay "/System/Library/Sounds/Glass.aiff" 2>/dev/null &
+        fi
+
         # Системное уведомление macOS
         if command -v osascript &>/dev/null; then
-            osascript -e "display notification \"Файл сохранён в $DEST\" with title \"Загрузка завершена!\" sound name \"$NOTIFY_SOUND\"" 2>/dev/null || true
+            osascript -e "display notification \"Файл сохранён в $DEST\" with title \"YT-DLP Downloader\" sound name \"Glass\"" 2>/dev/null || true
         fi
         return 0
     else
@@ -342,7 +404,7 @@ execute_download() {
 }
 
 # ------------------------------------------------------------------------------
-# Подменю: Выбор разрешения видео
+# Подменю: Выбор точного разрешения
 # ------------------------------------------------------------------------------
 menu_resolution() {
     local url="$1"
@@ -351,10 +413,10 @@ menu_resolution() {
     choice=$(select_menu "Выберите разрешение видео >" \
         "🌟 4K Ultra HD (2160p)" \
         "💎 2K Quad HD (1440p)" \
-        "🎬 Full HD (1080p - Оптимально)" \
-        "📱 HD (720p - Мобильное)" \
+        "🎬 Full HD (1080p - Рекомендуется)" \
+        "📱 HD (720p - Оптимально для телефонов)" \
         "📉 SD (480p)" \
-        "🪶 360p (Экономный трафик)" \
+        "🪶 360p (Экономный режим)" \
         "↩️  Назад")
 
     local height_limit=""
@@ -369,10 +431,10 @@ menu_resolution() {
     esac
 
     local container_choice
-    container_choice=$(select_menu "Выберите контейнер/формат >" \
-        "MP4 (Универсальный, рекомендуется)" \
+    container_choice=$(select_menu "Выберите формат контейнера >" \
+        "MP4 (Рекомендуется для Mac, iPhone и QuickTime)" \
         "MKV (Поддержка любых дорожек и субтитров)" \
-        "WEBM (Оригинал Google/VP9)")
+        "WEBM (Оригинал Google)")
 
     local container="mp4"
     case "$container_choice" in
@@ -403,11 +465,11 @@ menu_audio() {
     local choice
     choice=$(select_menu "Выберите формат аудио >" \
         "🎶 MP3 (Максимальный битрейт ~320k, обложка, теги)" \
-        "🍏 M4A / AAC (Apple нативный формат без пересжатия)" \
+        "🍏 M4A / AAC (Apple нативный без пересжатия)" \
         "🎼 FLAC (Lossless студийный звук)" \
-        "🎧 WAV (Несжатый звук)" \
+        "🎧 WAV (Несжатый PCM звук)" \
         "📻 OPUS (Максимальное качество при малом весе)" \
-        "⚡ Оригинальный аудиопоток без перекодирования (Быстро)" \
+        "⚡ Direct Stream Copy (Мгновенное сохранение оригинала)" \
         "↩️  Назад")
 
     local thumb_args=()
@@ -456,7 +518,7 @@ menu_audio() {
                 "${thumb_args[@]}" \
                 -o "$DEST/%(title)s.%(ext)s"
             ;;
-        *"Оригинальный"*)
+        *"Direct Stream"*)
             execute_download "$url" \
                 --no-playlist \
                 -x \
@@ -470,25 +532,25 @@ menu_audio() {
 }
 
 # ------------------------------------------------------------------------------
-# Подменю: Скачивание фрагмента / отрезка по времени
+# Подменю: Скачивание фрагмента (Time-slice)
 # ------------------------------------------------------------------------------
 menu_timeslice() {
     local url="$1"
     echo ""
-    echo -e "${CYAN}${BOLD}✂️ Скачивание конкретного отрезка видео/аудио${RESET}"
-    echo -e "${DIM}Примеры интервалов: 01:15-02:30 или 00:00:10-00:01:45${RESET}"
-    read -p "Введите начало и конец (ЧЧ:ММ:СС-ЧЧ:ММ:СС): " time_range
+    echo -e "${CYAN}${BOLD}✂️ Скачивание фрагмента по таймкоду${RESET}"
+    echo -e "${DIM}Примеры интервалов: 01:15-02:30 или 00:05:00-00:08:30${RESET}"
+    read -p "Введите начало и конец (ММ:СС-ММ:СС): " time_range
 
     if [ -z "$time_range" ]; then
-        echo -e "${YELLOW}Интервал не введён. Возврат в меню.${RESET}"
+        echo -e "${YELLOW}Интервал не указан.${RESET}"
         sleep 1
         return 0
     fi
 
     local slice_type
-    slice_type=$(select_menu "В каком формате скачать фрагмент? >" \
-        "🎬 Видео (MP4 Full HD)" \
-        "🎵 Аудио (MP3 320k)" \
+    slice_type=$(select_menu "Формат для отрезка >" \
+        "🎬 Видео Full HD (MP4)" \
+        "🎵 Аудио MP3 (320k)" \
         "↩️  Отмена")
 
     case "$slice_type" in
@@ -522,7 +584,7 @@ menu_playlist() {
     local choice
     choice=$(select_menu "Режим загрузки плейлиста >" \
         "📥 Скачать весь плейлист целиком" \
-        "🔢 Выбрать диапазон видео (например: 1-10 или 2,5,8)" \
+        "🔢 Выбрать диапазон номеров (например: 1-10 или 2,5,8)" \
         "↩️  Назад")
 
     case "$choice" in
@@ -586,6 +648,62 @@ menu_subtitles() {
 }
 
 # ------------------------------------------------------------------------------
+# Диагностика системы и раскрытия M-чипов
+# ------------------------------------------------------------------------------
+diagnose_system() {
+    clear
+    echo -e "${CYAN}${BOLD}🩺 ДИАГНОСТИКА ОКРУЖЕНИЯ И АППАРАТНОГО УСКОРЕНИЯ MAC${RESET}\n"
+    
+    echo -e "${WHITE}${BOLD}1. Аппаратная часть (Hardware):${RESET}"
+    echo "   • Модель процессора : $CPU_BRAND"
+    echo "   • Архитектура       : $CPU_ARCH"
+    
+    local os_ver
+    os_ver=$(sw_vers -productVersion 2>/dev/null || echo "Unknown")
+    echo "   • Версия macOS      : $os_ver"
+    echo ""
+
+    echo -e "${WHITE}${BOLD}2. Мультимедиа и кодеки (FFmpeg & VideoToolbox):${RESET}"
+    if command -v ffmpeg &>/dev/null; then
+        local ff_ver
+        ff_ver=$(ffmpeg -version 2>/dev/null | head -n 1)
+        echo "   • FFmpeg путь       : $(which ffmpeg)"
+        echo "   • FFmpeg сборка     : $ff_ver"
+        if ffmpeg -hwaccels 2>/dev/null | grep -q "videotoolbox"; then
+            echo -e "   • VideoToolbox      : ${GREEN}✓ ВКЛЮЧЕНО (Apple Hardware Acceleration активен)${RESET}"
+        else
+            echo -e "   • VideoToolbox      : ${RED}✗ Отключено${RESET}"
+        fi
+    else
+        echo -e "   • FFmpeg : ${RED}Не установлен!${RESET}"
+    fi
+    echo ""
+
+    echo -e "${WHITE}${BOLD}3. Загрузчик yt-dlp:${RESET}"
+    if command -v yt-dlp &>/dev/null; then
+        echo "   • yt-dlp путь       : $(which yt-dlp)"
+        echo "   • yt-dlp версия     : $(yt-dlp --version)"
+    else
+        echo -e "   • yt-dlp : ${RED}Не установлен!${RESET}"
+    fi
+    echo ""
+
+    echo -e "${WHITE}${BOLD}4. Дисковая подсистема:${RESET}"
+    echo "   • Папка загрузки    : $DEST"
+    if [ -w "$DEST" ]; then
+        echo -e "   • Права на запись   : ${GREEN}✓ Доступно${RESET}"
+        local free_space
+        free_space=$(df -h "$DEST" | awk 'NR==2 {print $4}')
+        echo "   • Свободно места    : $free_space"
+    else
+        echo -e "   • Права на запись   : ${RED}✗ Запрещено! Проверьте папку.${RESET}"
+    fi
+    echo ""
+
+    read -p "Нажмите Enter для возврата..." _
+}
+
+# ------------------------------------------------------------------------------
 # Подменю: Настройки
 # ------------------------------------------------------------------------------
 menu_settings() {
@@ -596,14 +714,23 @@ menu_settings() {
         local thumb_status="ВКЛ"
         [ "$EMBED_THUMBNAIL" != "true" ] && thumb_status="ВЫКЛ"
 
+        local apple_status="ВКЛ (H.264/AAC)"
+        [ "$APPLE_COMPAT_MODE" != "true" ] && apple_status="ВЫКЛ (Любой)"
+
+        local sound_status="ВКЛ"
+        [ "$SOUND_ENABLED" != "true" ] && sound_status="ВЫКЛ"
+
         local choice
         choice=$(select_menu "Настройки yt-downloader >" \
             "📁 Папка сохранения : $DEST" \
             "🖼️  Вшивать обложку : [$thumb_status]" \
             "🏷️  Вшивать метаданные : [$meta_status]" \
-            "🎞️  Контейнер видео : [$DEFAULT_CONTAINER]" \
+            "🍏 Режим совместимости с Mac : [$apple_status]" \
+            "🍪 Куки браузера для закрытых видео : [$COOKIE_BROWSER]" \
             "⚡ Потоков скачивания : [$CONCURRENT_FRAGMENTS]" \
-            "🔄 Обновить yt-dlp до последней версии" \
+            "🔊 Звук завершения : [$sound_status]" \
+            "🩺 Диагностика Mac и VideoToolbox" \
+            "🔄 Обновить yt-dlp" \
             "↩️  Назад в главное меню")
 
         case "$choice" in
@@ -620,39 +747,45 @@ menu_settings() {
                 fi
                 ;;
             *"Вшивать обложку"*)
-                if [ "$EMBED_THUMBNAIL" = "true" ]; then
-                    EMBED_THUMBNAIL="false"
-                else
-                    EMBED_THUMBNAIL="true"
-                fi
+                [ "$EMBED_THUMBNAIL" = "true" ] && EMBED_THUMBNAIL="false" || EMBED_THUMBNAIL="true"
                 save_config
                 ;;
             *"Вшивать метаданные"*)
-                if [ "$EMBED_METADATA" = "true" ]; then
-                    EMBED_METADATA="false"
-                else
-                    EMBED_METADATA="true"
-                fi
+                [ "$EMBED_METADATA" = "true" ] && EMBED_METADATA="false" || EMBED_METADATA="true"
                 save_config
                 ;;
-            *"Контейнер видео"*)
-                local cont_choice
-                cont_choice=$(select_menu "Выберите контейнер по умолчанию >" "mp4" "mkv" "webm")
-                if [ -n "$cont_choice" ]; then
-                    DEFAULT_CONTAINER="$cont_choice"
-                    save_config
-                fi
+            *"Режим совместимости"*)
+                [ "$APPLE_COMPAT_MODE" = "true" ] && APPLE_COMPAT_MODE="false" || APPLE_COMPAT_MODE="true"
+                save_config
+                ;;
+            *"Куки браузера"*)
+                local b_choice
+                b_choice=$(select_menu "Выберите браузер для чтения cookies >" "none (Без куков)" "safari" "chrome" "firefox")
+                case "$b_choice" in
+                    *"safari"*)  COOKIE_BROWSER="safari" ;;
+                    *"chrome"*)  COOKIE_BROWSER="chrome" ;;
+                    *"firefox"*) COOKIE_BROWSER="firefox" ;;
+                    *)           COOKIE_BROWSER="none" ;;
+                esac
+                save_config
                 ;;
             *"Потоков скачивания"*)
                 local frag_choice
-                frag_choice=$(select_menu "Количество одновременных фрагментов >" "2" "4 (Рекомендуется)" "8 (Быстрый интернет)" "16")
+                frag_choice=$(select_menu "Количество параллельных потоков >" "4" "8 (Рекомендуется для M1/M2/M3/M4)" "16 (Гигабитный интернет)" "2")
                 case "$frag_choice" in
-                    *"2"*)  CONCURRENT_FRAGMENTS="2" ;;
                     *"4"*)  CONCURRENT_FRAGMENTS="4" ;;
                     *"8"*)  CONCURRENT_FRAGMENTS="8" ;;
                     *"16"*) CONCURRENT_FRAGMENTS="16" ;;
+                    *"2"*)  CONCURRENT_FRAGMENTS="2" ;;
                 esac
                 save_config
+                ;;
+            *"Звук завершения"*)
+                [ "$SOUND_ENABLED" = "true" ] && SOUND_ENABLED="false" || SOUND_ENABLED="true"
+                save_config
+                ;;
+            *"Диагностика"*)
+                diagnose_system
                 ;;
             *"Обновить yt-dlp"*)
                 echo -e "\n${CYAN}Проверка обновлений yt-dlp...${RESET}"
@@ -720,24 +853,37 @@ post_download_menu() {
 # Главный цикл программы
 # ------------------------------------------------------------------------------
 main() {
-    if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-        show_banner
-        echo -e "${BOLD}Использование:${RESET}"
-        echo "  ./yt.sh                  # Запуск в интерактивном режиме (FZF / меню)"
-        echo "  ./yt.sh <URL>            # Запуск сразу с указанной ссылкой"
-        echo "  ./yt.sh -h | --help      # Показать справку"
-        echo ""
-        echo -e "${BOLD}Особенности:${RESET}"
-        echo "  • Быстрые пресеты: Максимальное качество, 1080p, Минимальное качество, Сразу MP3"
-        echo "  • Выбор качества вручную: 4K, 2K, 1080p, 720p, 480p, 360p"
-        echo "  • Аудио форматы: MP3 (320k), M4A, FLAC, WAV, OPUS, Direct Stream"
-        echo "  • ✂️ Скачивание конкретных отрезков (Time-slice)"
-        echo "  • Автоматический захват ссылки из буфера обмена (macOS)"
-        echo "  • Вшивание метаданных, глав (chapters) и обложек высокого разрешения"
-        echo "  • Нативные уведомления macOS со звуком"
-        echo "  • Сохранение настроек в ~/.config/yt-downloader/config.env"
-        exit 0
-    fi
+    # Обработка аргументов командной строки
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)
+                show_banner
+                echo -e "${BOLD}Использование:${RESET}"
+                echo "  ./yt.sh                  # Интерактивное меню (с автоподхватом из буфера macOS)"
+                echo "  ./yt.sh <URL>            # Запуск сразу с указанной ссылкой"
+                echo "  ./yt.sh --diag           # Диагностика Mac, M-процессора и VideoToolbox"
+                echo "  ./yt.sh -h | --help      # Показать эту справку"
+                echo ""
+                echo -e "${BOLD}Особенности macOS:${RESET}"
+                echo "  • Аппаратное ускорение VideoToolbox на процессорах Apple Silicon (M1/M2/M3/M4)"
+                echo "  • Форсирование FastStart (-movflags +faststart) для мгновенного QuickLook в Finder"
+                echo "  • Нативные звуки и баннеры уведомлений macOS"
+                echo "  • Поддержка Safari/Chrome куков для загрузки приватных видео"
+                exit 0
+                ;;
+            --diag)
+                diagnose_system
+                exit 0
+                ;;
+            --debug|-d)
+                DEBUG_MODE="true"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
 
     check_dependencies
     load_config
@@ -750,7 +896,7 @@ main() {
         local URL=""
         if [ -n "$initial_url" ]; then
             URL="$initial_url"
-            initial_url="" # Сбрасываем для следующей итерации
+            initial_url=""
         else
             URL=$(get_url)
         fi
@@ -760,10 +906,8 @@ main() {
             exit 0
         fi
 
-        # Отображение информации о видео
         fetch_and_display_info "$URL"
 
-        # Главное меню выбора действия
         local ACTION
         ACTION=$(select_menu "Выберите действие для медиа >" \
             "🚀 Максимальное качество (Best Video + Audio • $DEFAULT_CONTAINER)" \
@@ -776,7 +920,7 @@ main() {
             "📋 Показать форматы и выбрать ID вручную" \
             "💬 Скачать субтитры" \
             "🖼️  Скачать только обложку" \
-            "⚙️  Настройки и конфигурация" \
+            "⚙️  Настройки и оптимизация Mac" \
             "❌ Выход")
 
         local thumb_args=()

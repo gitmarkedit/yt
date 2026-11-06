@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 #  ⚡ Установщик всех зависимостей для YT-DLP Ultimate Downloader
+#  Оптимизировано для macOS (Apple Silicon M1/M2/M3/M4 & Intel)
 # ==============================================================================
 
 set -e
@@ -16,6 +17,7 @@ CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 BOLD='\033[1m'
+GRAY='\033[38;5;244m'
 RESET='\033[0m'
 
 clear
@@ -23,36 +25,45 @@ echo -e "${CYAN}${BOLD}"
 cat << "EOF"
    ╭─────────────────────────────────────────────────────────────╮
    │         ⚡  У С Т А Н О В К А   Y T - D L P  ⚡             │
-   │       Автоматическая установка всех зависимостей            │
+   │      Оптимизация для macOS & процессоров Apple Silicon      │
    ╰─────────────────────────────────────────────────────────────╯
 EOF
 echo -e "${RESET}"
 
-echo -e "${YELLOW}🔍 Шаг 1: Проверка системы...${RESET}"
+echo -e "${YELLOW}🔍 Шаг 1: Проверка аппаратной платформы...${RESET}"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
-echo -e "${GREEN}✓ ОС: $OS ($ARCH)${RESET}\n"
+CPU_MODEL="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "$ARCH")"
+
+echo -e "   • Платформа: ${GREEN}$OS ($ARCH)${RESET}"
+echo -e "   • Процессор: ${CYAN}$CPU_MODEL${RESET}\n"
 
 # ------------------------------------------------------------------------------
-# 1. Установка утилит
+# 1. Установка утилит через Homebrew или напрямую
 # ------------------------------------------------------------------------------
 echo -e "${YELLOW}📦 Шаг 2: Установка зависимостей (yt-dlp, ffmpeg, fzf)...${RESET}"
 
 if [ "$OS" = "Darwin" ]; then
+    # Подключение путей brew (Apple Silicon /opt/homebrew или Intel /usr/local)
+    if [ -f "/opt/homebrew/bin/brew" ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -f "/usr/local/bin/brew" ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+
     # Проверка Homebrew
-    if ! command -v brew &>/dev/null && [ ! -f "/opt/homebrew/bin/brew" ] && [ ! -f "/usr/local/bin/brew" ]; then
+    if ! command -v brew &>/dev/null; then
         echo -e "${YELLOW}Homebrew не обнаружен на вашем Mac.${RESET}"
         echo -e "Выберите способ установки:"
         echo -e "  ${CYAN}1)${RESET} Установить Homebrew и все пакеты автоматически (Рекомендуется)"
-        echo -e "  ${CYAN}2)${RESET} Скачать готовые бинарники yt-dlp напрямую (Быстро, без Homebrew)"
+        echo -e "  ${CYAN}2)${RESET} Скачать автономный yt-dlp напрямую (Быстро, без Homebrew)"
         read -p "Выберите вариант [1/2, по умолчанию 1]: " brew_choice
         brew_choice=${brew_choice:-1}
 
         if [ "$brew_choice" = "1" ]; then
-            echo -e "\n${CYAN}Установка Homebrew (потребуется подтверждение и пароль от Mac)...${RESET}"
+            echo -e "\n${CYAN}Установка Homebrew...${RESET}"
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             
-            # Подключение путей brew
             if [ -f "/opt/homebrew/bin/brew" ]; then
                 eval "$(/opt/homebrew/bin/brew shellenv)"
             elif [ -f "/usr/local/bin/brew" ]; then
@@ -62,15 +73,13 @@ if [ "$OS" = "Darwin" ]; then
             echo -e "${CYAN}Установка yt-dlp, ffmpeg и fzf через Homebrew...${RESET}"
             brew install yt-dlp ffmpeg fzf || true
         else
-            echo -e "\n${CYAN}Скачивание автономного yt-dlp в папку проекта...${RESET}"
+            echo -e "\n${CYAN}Скачивание автономного yt-dlp для macOS...${RESET}"
             curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" -o "$BIN_DIR/yt-dlp"
             chmod +x "$BIN_DIR/yt-dlp"
             echo -e "${GREEN}✓ yt-dlp установлен в $BIN_DIR/yt-dlp${RESET}"
 
-            # Проверка ffmpeg
             if ! command -v ffmpeg &>/dev/null; then
-                echo -e "${YELLOW}Для объединения 1080p/4K видео и конвертации в MP3 нужен ffmpeg.${RESET}"
-                echo -e "${CYAN}Устанавливаем Homebrew для ffmpeg...${RESET}"
+                echo -e "${YELLOW}Для объединения 4K видео и конвертации в MP3 устанавливаем Homebrew и ffmpeg...${RESET}"
                 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
                 if [ -f "/opt/homebrew/bin/brew" ]; then
                     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -81,13 +90,8 @@ if [ "$OS" = "Darwin" ]; then
             fi
         fi
     else
-        # Homebrew есть
-        if [ -f "/opt/homebrew/bin/brew" ]; then
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-        elif [ -f "/usr/local/bin/brew" ]; then
-            eval "$(/usr/local/bin/brew shellenv)"
-        fi
-        echo -e "${CYAN}Установка/обновление yt-dlp, ffmpeg и fzf через Homebrew...${RESET}"
+        echo -e "${GREEN}✓ Homebrew обнаружен${RESET}"
+        echo -e "${CYAN}Установка / обновление yt-dlp, ffmpeg и fzf...${RESET}"
         brew install yt-dlp ffmpeg fzf || true
     fi
 
@@ -106,18 +110,30 @@ elif [ "$OS" = "Linux" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 2. Настройка прав на исполнение
+# 2. Проверка VideoToolbox аппаратного ускорения
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}⚙️ Шаг 3: Настройка прав запуска...${RESET}"
+echo -e "\n${YELLOW}⚡ Шаг 3: Проверка аппаратного ускорения Apple Silicon...${RESET}"
+if command -v ffmpeg &>/dev/null; then
+    if ffmpeg -hwaccels 2>/dev/null | grep -q "videotoolbox"; then
+        echo -e "${GREEN}✓ VideoToolbox аппаратное ускорение АКТИВИРОВАНО!${RESET}"
+        echo -e "   ${GRAY}Медиа-ядро вашего $CPU_MODEL будет аппаратно обрабатывать видео.${RESET}"
+    else
+        echo -e "${YELLOW}⚠️ VideoToolbox не активен, будет использоваться стандартный CPU.${RESET}"
+    fi
+fi
+
+# ------------------------------------------------------------------------------
+# 3. Настройка прав запуска
+# ------------------------------------------------------------------------------
+echo -e "\n${YELLOW}⚙️ Шаг 4: Настройка прав запуска...${RESET}"
 chmod +x "$SCRIPT_DIR/yt.sh" "$SCRIPT_DIR/start.sh" 2>/dev/null || true
-echo -e "${GREEN}✓ Файлы скрипта готовы к запуску!${RESET}"
+echo -e "${GREEN}✓ Права на исполнение выданы!${RESET}"
 
 # ------------------------------------------------------------------------------
-# 3. Настройка глобальной команды 'yt'
+# 4. Настройка глобальной команды 'yt'
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}🔗 Шаг 4: Настройка быстрого запуска команды 'yt'${RESET}"
+echo -e "\n${YELLOW}🔗 Шаг 5: Настройка быстрого запуска команды 'yt'${RESET}"
 
-# Симлинк в системную папку (если есть права)
 if [ -d "/opt/homebrew/bin" ] && [ -w "/opt/homebrew/bin" ]; then
     ln -sf "$SCRIPT_DIR/yt.sh" /opt/homebrew/bin/yt 2>/dev/null && \
     echo -e "${GREEN}✓ Создана системная ссылка: /opt/homebrew/bin/yt${RESET}"
@@ -126,7 +142,6 @@ elif [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
     echo -e "${GREEN}✓ Создана системная ссылка: /usr/local/bin/yt${RESET}"
 fi
 
-# Добавление алиаса в shell rc файл (~/.zshrc / ~/.bashrc)
 SHELL_RC=""
 if [ -f "$HOME/.zshrc" ] || [ "$SHELL" = "/bin/zsh" ]; then
     SHELL_RC="$HOME/.zshrc"
@@ -146,9 +161,9 @@ if [ -n "$SHELL_RC" ]; then
     fi
 fi
 
-echo -e "\n${GREEN}${BOLD}🎉 ВСЁ ГОТОВО К РАБОТЕ!${RESET}"
+echo -e "\n${GREEN}${BOLD}🎉 УСТАНОВКА И ОПТИМИЗАЦИЯ ЗАВЕРШЕНЫ!${RESET}"
 echo -e "─────────────────────────────────────────────────────────────"
-echo -e "${BOLD}Как теперь запускать программу:${RESET}"
-echo -e "  1. Напишите в терминале:      ${CYAN}yt${RESET}"
-echo -e "  2. Или из папки проекта:     ${CYAN}bash start.sh${RESET}"
+echo -e "${BOLD}Как запускать программу:${RESET}"
+echo -e "  1. Из любой папки терминала :  ${CYAN}yt${RESET}"
+echo -e "  2. Или из папки проекта    :  ${CYAN}bash start.sh${RESET}"
 echo -e "─────────────────────────────────────────────────────────────\n"
