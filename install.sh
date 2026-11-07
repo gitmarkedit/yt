@@ -6,9 +6,22 @@
 # ==============================================================================
 
 NO_LAUNCH="false"
+FORCE_BREW="false"
+FORCE_STANDALONE="false"
+
 for arg in "$@"; do
     case "$arg" in
         --no-launch) NO_LAUNCH="true" ;;
+        --brew) FORCE_BREW="true" ;;
+        --standalone) FORCE_STANDALONE="true" ;;
+        -h|--help)
+            echo "Использование: bash install.sh [опции]"
+            echo "  --brew         Принудительно использовать Homebrew (установит brew, если отсутствует)"
+            echo "  --standalone   Автономная установка бинарников без Homebrew и без прав администратора"
+            echo "  --no-launch    Не запускать yt автоматически после завершения установки"
+            echo "  -h, --help     Показать эту справку"
+            exit 0
+            ;;
     esac
 done
 
@@ -63,7 +76,16 @@ ARCH="$(uname -m 2>/dev/null || echo "Unknown")"
 CPU_MODEL="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "$ARCH")"
 
 echo -e "   • Платформа : ${GREEN}$OS ($ARCH)${RESET}"
-echo -e "   • Процессор : ${CYAN}$CPU_MODEL${RESET}\n"
+echo -e "   • Процессор : ${CYAN}$CPU_MODEL${RESET}"
+if [ "$OS" = "Darwin" ]; then
+    if xcode-select -p &>/dev/null; then
+        echo -e "   • Xcode CLI : ${GREEN}✓ Установлен ($(xcode-select -p 2>/dev/null))${RESET}\n"
+    else
+        echo -e "   • Xcode CLI : ${GRAY}Не установлен (не требуется для работы)${RESET}\n"
+    fi
+else
+    echo ""
+fi
 
 # Проверка интернет-соединения
 check_internet() {
@@ -133,64 +155,142 @@ install_standalone_fzf() {
 }
 
 # ------------------------------------------------------------------------------
-# Шаг 2: Проверка и установка зависимостей
+# Шаг 2: Аудит и настройка компонентов
 # ------------------------------------------------------------------------------
-echo -e "${YELLOW}📦 Шаг 2: Проверка и настройка компонентов...${RESET}"
+echo -e "${YELLOW}📦 Шаг 2: Аудит и настройка компонентов системы...${RESET}"
 
-if [ "$OS" = "Darwin" ]; then
-    if ! check_internet; then
-        echo -e "${RED}❌ Отсутствует подключение к интернету для загрузки компонентов.${RESET}"
-        echo -e "${YELLOW}Подключитесь к сети и повторите запуск.${RESET}"
-        exit 1
-    fi
-
-    # 1. Если Homebrew уже установлен, пробуем штатную установку
+audit_and_install_dependencies() {
+    # 1. Проверка окружения Homebrew
+    local brew_available=false
     if [ -x "/opt/homebrew/bin/brew" ]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
+        eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
     elif [ -x "/usr/local/bin/brew" ]; then
-        eval "$(/usr/local/bin/brew shellenv)"
+        eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
     fi
 
     if command -v brew &>/dev/null; then
-        echo -e "${GREEN}✓ Обнаружен Homebrew${RESET}"
-        missing_pkgs=()
-        command -v yt-dlp &>/dev/null || missing_pkgs+=("yt-dlp")
-        command -v ffmpeg &>/dev/null || missing_pkgs+=("ffmpeg")
-        command -v fzf &>/dev/null || missing_pkgs+=("fzf")
+        brew_available=true
+    fi
 
-        if [ ${#missing_pkgs[@]} -gt 0 ]; then
-            echo -e "${CYAN}Установка пакетов через Homebrew: ${missing_pkgs[*]}...${RESET}"
-            brew install "${missing_pkgs[@]}" 2>&1 || true
-        else
-            echo -e "${GREEN}✓ Все ключевые утилиты уже установлены!${RESET}"
+    # 2. Индивидуальный аудит каждой зависимости
+    local have_ytdlp=false
+    local have_ffmpeg=false
+    local have_fzf=false
+
+    if command -v yt-dlp &>/dev/null || [ -x "$BIN_DIR/yt-dlp" ]; then
+        have_ytdlp=true
+    fi
+
+    if command -v ffmpeg &>/dev/null || [ -x "$BIN_DIR/ffmpeg" ]; then
+        have_ffmpeg=true
+    fi
+
+    if command -v fzf &>/dev/null || [ -x "$BIN_DIR/fzf" ]; then
+        have_fzf=true
+    fi
+
+    echo -e "   • Homebrew         : $( [ "$brew_available" = "true" ] && echo -e "${GREEN}✓ Установлен ($(command -v brew))${RESET}" || echo -e "${GRAY}Не установлен${RESET}" )"
+    echo -e "   • yt-dlp           : $( [ "$have_ytdlp" = "true" ] && echo -e "${GREEN}✓ Доступен${RESET}" || echo -e "${YELLOW}✗ Требуется установка${RESET}" )"
+    echo -e "   • FFmpeg           : $( [ "$have_ffmpeg" = "true" ] && echo -e "${GREEN}✓ Доступен${RESET}" || echo -e "${YELLOW}✗ Требуется установка${RESET}" )"
+    echo -e "   • fzf (селектор)   : $( [ "$have_fzf" = "true" ] && echo -e "${GREEN}✓ Доступен${RESET}" || echo -e "${YELLOW}✗ Требуется установка${RESET}" )"
+    echo ""
+
+    if [ "$have_ytdlp" = "true" ] && [ "$have_ffmpeg" = "true" ] && [ "$have_fzf" = "true" ]; then
+        echo -e "${GREEN}✓ Все ключевые утилиты уже установлены и готовы к работе!${RESET}"
+        return 0
+    fi
+
+    if [ "$OS" = "Darwin" ]; then
+        if ! check_internet; then
+            echo -e "${RED}❌ Отсутствует подключение к интернету для загрузки компонентов.${RESET}"
+            echo -e "${YELLOW}Подключитесь к сети и повторите запуск.${RESET}"
+            exit 1
+        fi
+
+        # Если Homebrew не найден, предлагаем установить Homebrew или продолжить автономно
+        if [ "$brew_available" = "false" ]; then
+            local choice="2"
+            if [ "$FORCE_BREW" = "true" ]; then
+                choice="1"
+            elif [ "$FORCE_STANDALONE" = "true" ] || [ ! -t 0 ]; then
+                choice="2"
+            else
+                echo -e "${CYAN}💡 На вашем Mac не обнаружен пакетный менеджер Homebrew.${RESET}"
+                echo -e "${GRAY}   (Полный пакет Xcode 12+ ГБ НЕ требуется — программа работает автономно).${RESET}\n"
+                echo -e "   ${YELLOW}1)${RESET} Установить Homebrew (официальный менеджер пакетов macOS, потребуется пароль администратора)"
+                echo -e "   ${GREEN}2)${RESET} Быстрая автономная установка (бинарники в папку проекта, без прав root, ~5 сек) ${BOLD}[По умолчанию]${RESET}\n"
+                local user_choice=""
+                read -r -t 20 -p "   Выберите вариант [1/2, Enter = 2]: " user_choice 2>/dev/null || user_choice="2"
+                user_choice="${user_choice:-2}"
+                [ "$user_choice" = "1" ] && choice="1"
+            fi
+
+            if [ "$choice" = "1" ]; then
+                echo -e "\n${CYAN}⚡ Запуск официального установщика Homebrew...${RESET}"
+                echo -e "${GRAY}Следуйте подсказкам установщика Homebrew в терминале:${RESET}"
+                if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+                    if [ -x "/opt/homebrew/bin/brew" ]; then
+                        eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
+                    elif [ -x "/usr/local/bin/brew" ]; then
+                        eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
+                    fi
+                    if command -v brew &>/dev/null; then
+                        brew_available=true
+                        echo -e "${GREEN}✓ Homebrew успешно установлен!${RESET}"
+                    fi
+                else
+                    echo -e "${YELLOW}⚠️ Установка Homebrew отменена или не удалась.${RESET}"
+                    echo -e "${CYAN}⚡ Переходим к быстрой автономной установке без Homebrew...${RESET}"
+                fi
+            else
+                echo -e "   ${GREEN}✓ Выбран автономный режим установки без Homebrew.${RESET}"
+            fi
+        fi
+
+        # Если Homebrew доступен (был или только что установлен)
+        if [ "$brew_available" = "true" ]; then
+            local missing_pkgs=()
+            command -v yt-dlp &>/dev/null || missing_pkgs+=("yt-dlp")
+            command -v ffmpeg &>/dev/null || missing_pkgs+=("ffmpeg")
+            command -v fzf &>/dev/null || missing_pkgs+=("fzf")
+
+            if [ ${#missing_pkgs[@]} -gt 0 ]; then
+                echo -e "\n${CYAN}Установка пакетов через Homebrew: ${missing_pkgs[*]}...${RESET}"
+                if ! brew install "${missing_pkgs[@]}" 2>&1; then
+                    echo -e "${YELLOW}⚠️ Предупреждение Homebrew при установке пакетов.${RESET}"
+                    echo -e "${CYAN}Проверяем и докачиваем оставшиеся компоненты в автономном режиме...${RESET}"
+                fi
+            fi
+        fi
+
+        # Автономный Fallback: гарантированная загрузка бинарников
+        # Скачивает только то, что всё ещё отсутствует
+        install_standalone_ytdlp
+        install_standalone_ffmpeg
+        install_standalone_fzf
+
+    elif [ "$OS" = "Linux" ]; then
+        if ! check_internet; then
+            echo -e "${RED}❌ Отсутствует подключение к интернету.${RESET}"
+        fi
+
+        if command -v apt-get &>/dev/null; then
+            echo -e "${CYAN}Установка пакетов через apt-get...${RESET}"
+            sudo apt-get update -y || true
+            sudo apt-get install -y ffmpeg fzf curl python3 || true
+            if ! command -v yt-dlp &>/dev/null; then
+                sudo curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+                sudo chmod a+rx /usr/local/bin/yt-dlp || true
+            fi
+        elif command -v pacman &>/dev/null; then
+            sudo pacman -Sy --noconfirm yt-dlp ffmpeg fzf || true
+        elif command -v dnf &>/dev/null; then
+            sudo dnf install -y yt-dlp ffmpeg fzf || true
         fi
     fi
+}
 
-    # 2. Автономный Fallback: гарантированная загрузка бинарников
-    # Работает если Homebrew отсутствует, выдает ошибку Tier 3 или нет прав root
-    install_standalone_ytdlp
-    install_standalone_ffmpeg
-    install_standalone_fzf
-
-elif [ "$OS" = "Linux" ]; then
-    if ! check_internet; then
-        echo -e "${RED}❌ Отсутствует подключение к интернету.${RESET}"
-    fi
-
-    if command -v apt-get &>/dev/null; then
-        echo -e "${CYAN}Установка пакетов через apt-get...${RESET}"
-        sudo apt-get update -y || true
-        sudo apt-get install -y ffmpeg fzf curl python3 || true
-        if ! command -v yt-dlp &>/dev/null; then
-            sudo curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
-            sudo chmod a+rx /usr/local/bin/yt-dlp || true
-        fi
-    elif command -v pacman &>/dev/null; then
-        sudo pacman -Sy --noconfirm yt-dlp ffmpeg fzf || true
-    elif command -v dnf &>/dev/null; then
-        sudo dnf install -y yt-dlp ffmpeg fzf || true
-    fi
-fi
+audit_and_install_dependencies
 
 # ------------------------------------------------------------------------------
 # Шаг 3: Проверка VideoToolbox аппаратного ускорения

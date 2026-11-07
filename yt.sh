@@ -903,7 +903,12 @@ diagnose_system() {
         if command -v brew &>/dev/null; then
             echo -e "   • Homebrew           : ${GREEN}✓ Обнаружен ($(command -v brew))${RESET}"
         else
-            echo -e "   • Homebrew           : ${YELLOW}⚠️ Не найден (/opt/homebrew или /usr/local)${RESET}"
+            echo -e "   • Homebrew           : ${CYAN}ℹ️ Не установлен (используются автономные бинарники)${RESET}"
+        fi
+        if xcode-select -p &>/dev/null; then
+            echo -e "   • Xcode CLI Tools    : ${GREEN}✓ Доступен ($(xcode-select -p 2>/dev/null))${RESET}"
+        else
+            echo -e "   • Xcode CLI Tools    : ${GRAY}ℹ️ Не установлен (не требуется для работы)${RESET}"
         fi
         command -v osascript &>/dev/null && echo -e "   • Уведомления macOS  : ${GREEN}✓ osascript доступен${RESET}" || echo -e "   • Уведомления macOS  : ${GRAY}✗ недоступно${RESET}"
         command -v afplay &>/dev/null && echo -e "   • Звуки macOS        : ${GREEN}✓ afplay доступен${RESET}" || echo -e "   • Звуки macOS        : ${GRAY}✗ недоступно${RESET}"
