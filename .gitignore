@@ -9,3 +9,5 @@ tmp/
 config.env
 Media/
 Downloads/
+bin/
+*.bak

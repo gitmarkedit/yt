@@ -41,19 +41,27 @@
 
 ## 🚀 Быстрый старт (Установка в 1 команду)
 
-### Вариант 1. Универсальная установка с нуля (Рекомендуется для всех)
-Не требует ни **Homebrew**, ни **Xcode**, ни прав администратора. Работает на любом Mac (Apple Silicon M1/M2/M3/M4 & Intel):
+### Вариант 1. Установка в 1 команду (Самый простой способ для любого Mac)
+Не требует ни **Homebrew**, ни **Xcode**, ни прав администратора. Идеально оптимизировано под процессоры **Apple Silicon (M1/M2/M3/M4)** и Intel:
 
-Откройте программу **Терминал** и вставьте одну команду:
+Откройте программу **Терминал** (`Cmd + Пробел` -> введите `Терминал` -> `Enter`) и вставьте одну команду:
 ```bash
-mkdir -p ~/yt && curl -fsSL https://github.com/gitmarkedit/yt/archive/refs/heads/main.tar.gz | tar -xz -C ~/yt --strip-components=1 && bash ~/yt/install.sh && yt
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/gitmarkedit/yt/main/install.sh)"
+```
+*Установщик автоматически загрузит проект, настроит медиа-движок с аппаратным ускорением VideoToolbox, пропишет команду `yt` и сразу запустит программу!*
+
+---
+
+### Вариант 2. Автономная установка через архив
+```bash
+mkdir -p ~/yt && curl -fsSL https://github.com/gitmarkedit/yt/archive/refs/heads/main.tar.gz | tar -xz -C ~/yt --strip-components=1 && bash ~/yt/install.sh
 ```
 
 ---
 
-### Вариант 2. Через Git (для разработчиков)
+### Вариант 3. Через Git (для разработчиков)
 ```bash
-git clone https://github.com/gitmarkedit/yt.git ~/yt && cd ~/yt && bash install.sh && yt
+git clone https://github.com/gitmarkedit/yt.git ~/yt && cd ~/yt && bash install.sh
 ```
 
 ---

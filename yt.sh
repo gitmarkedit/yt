@@ -4,8 +4,14 @@
 #  Высокопроизводительный медиа-загрузчик с аппаратным ускорением VideoToolbox
 # ==============================================================================
 
-# Определение директории скрипта
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Корректное определение реальной директории скрипта даже при запуске через symlink
+SOURCE="${BASH_SOURCE[0]:-$0}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" 2>/dev/null && pwd)"
 
 # Автоматическое подключение путей Homebrew (Apple Silicon /opt/homebrew и Intel /usr/local)
 export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$HOME/.local/bin:$PATH"
@@ -170,7 +176,7 @@ check_dependencies() {
 
         if [[ "$auto_install" =~ ^[YyДд] ]]; then
             if [ -f "$SCRIPT_DIR/install.sh" ]; then
-                bash "$SCRIPT_DIR/install.sh"
+                bash "$SCRIPT_DIR/install.sh" --no-launch
             else
                 if command -v brew &>/dev/null; then
                     brew install "${missing[@]}" fzf || true
@@ -205,6 +211,21 @@ check_dependencies() {
                     fi
                 fi
                 rm -rf "$temp_dir"
+            fi
+            if ! command -v fzf &>/dev/null; then
+                local fzf_arch="arm64"
+                local cur_arch
+                cur_arch="$(uname -m 2>/dev/null || echo "arm64")"
+                [ "$cur_arch" = "x86_64" ] && fzf_arch="amd64"
+                local tag
+                tag=$(curl -sIL https://github.com/junegunn/fzf/releases/latest 2>/dev/null | tr -d '\r' | awk -F'/tag/' '/[Ll]ocation:/ {print $2}' | tail -n 1)
+                [ -z "$tag" ] && tag="v0.75.0"
+                local ver="${tag#v}"
+                local fzf_url="https://github.com/junegunn/fzf/releases/download/${tag}/fzf-${ver}-darwin_${fzf_arch}.tar.gz"
+                if curl -fL --progress-bar "$fzf_url" | tar -xz -C "$SCRIPT_DIR/bin" 2>/dev/null; then
+                    chmod +x "$SCRIPT_DIR/bin/fzf" 2>/dev/null || true
+                    xattr -d com.apple.quarantine "$SCRIPT_DIR/bin/fzf" 2>/dev/null || true
+                fi
             fi
             if ! command -v yt-dlp &>/dev/null || ! command -v ffmpeg &>/dev/null; then
                 echo -e "${RED}❌ Не удалось автоматически установить компоненты. Проверьте подключение к интернету.${RESET}"

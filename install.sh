@@ -5,13 +5,21 @@
 #  Автономный режим: не требует предварительной установки Xcode или Homebrew
 # ==============================================================================
 
-# Определение директории скрипта
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_DIR="$SCRIPT_DIR/bin"
-mkdir -p "$BIN_DIR" 2>/dev/null || true
+NO_LAUNCH="false"
+for arg in "$@"; do
+    case "$arg" in
+        --no-launch) NO_LAUNCH="true" ;;
+    esac
+done
 
-# Автоматическое подключение стандартных путей
-export PATH="$BIN_DIR:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$HOME/.local/bin:$PATH"
+# Корректное определение реальной директории скрипта даже при запуске через symlink
+SOURCE="${BASH_SOURCE[0]:-$0}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" 2>/dev/null && pwd)"
 
 # Цвета
 GREEN='\033[0;32m'
@@ -21,6 +29,23 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 GRAY='\033[38;5;244m'
 RESET='\033[0m'
+
+# Если install.sh запущен удаленно через curl или без локальных файлов проекта:
+if [ ! -f "$SCRIPT_DIR/yt.sh" ]; then
+    SCRIPT_DIR="$HOME/yt"
+    mkdir -p "$SCRIPT_DIR" 2>/dev/null || true
+    echo -e "${CYAN}📥 Загрузка файлов проекта yt (macOS Edition)...${RESET}"
+    if ! curl -fsSL "https://github.com/gitmarkedit/yt/archive/refs/heads/main.tar.gz" | tar -xz -C "$SCRIPT_DIR" --strip-components=1; then
+        echo -e "${RED}❌ Не удалось загрузить файлы проекта с GitHub.${RESET}"
+        exit 1
+    fi
+fi
+
+BIN_DIR="$SCRIPT_DIR/bin"
+mkdir -p "$BIN_DIR" 2>/dev/null || true
+
+# Автоматическое подключение стандартных путей
+export PATH="$BIN_DIR:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$HOME/.local/bin:$PATH"
 
 clear 2>/dev/null || true
 echo -e "${CYAN}${BOLD}"
@@ -83,6 +108,30 @@ install_standalone_ffmpeg() {
     return 0
 }
 
+install_standalone_fzf() {
+    if ! command -v fzf &>/dev/null && [ ! -x "$BIN_DIR/fzf" ]; then
+        echo -e "${CYAN}⚡ Загрузка интерактивного селектора fzf для macOS...${RESET}"
+        mkdir -p "$BIN_DIR"
+        local fzf_arch="arm64"
+        if [ "$ARCH" = "x86_64" ]; then
+            fzf_arch="amd64"
+        fi
+        local tag
+        tag=$(curl -sIL https://github.com/junegunn/fzf/releases/latest 2>/dev/null | tr -d '\r' | awk -F'/tag/' '/[Ll]ocation:/ {print $2}' | tail -n 1)
+        [ -z "$tag" ] && tag="v0.75.0"
+        local ver="${tag#v}"
+        local fzf_url="https://github.com/junegunn/fzf/releases/download/${tag}/fzf-${ver}-darwin_${fzf_arch}.tar.gz"
+        if curl -fL --progress-bar "$fzf_url" | tar -xz -C "$BIN_DIR" 2>/dev/null; then
+            if [ -x "$BIN_DIR/fzf" ]; then
+                chmod +x "$BIN_DIR/fzf"
+                xattr -d com.apple.quarantine "$BIN_DIR/fzf" 2>/dev/null || true
+                echo -e "${GREEN}✓ fzf успешно установлен в $BIN_DIR/fzf!${RESET}"
+            fi
+        fi
+    fi
+    return 0
+}
+
 # ------------------------------------------------------------------------------
 # Шаг 2: Проверка и установка зависимостей
 # ------------------------------------------------------------------------------
@@ -121,6 +170,7 @@ if [ "$OS" = "Darwin" ]; then
     # Работает если Homebrew отсутствует, выдает ошибку Tier 3 или нет прав root
     install_standalone_ytdlp
     install_standalone_ffmpeg
+    install_standalone_fzf
 
 elif [ "$OS" = "Linux" ]; then
     if ! check_internet; then
@@ -164,6 +214,7 @@ echo -e "\n${YELLOW}⚙️ Шаг 4: Настройка прав запуска.
 chmod +x "$SCRIPT_DIR/yt.sh" "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/install.sh" 2>/dev/null || true
 [ -x "$BIN_DIR/yt-dlp" ] && chmod +x "$BIN_DIR/yt-dlp" 2>/dev/null || true
 [ -x "$BIN_DIR/ffmpeg" ] && chmod +x "$BIN_DIR/ffmpeg" 2>/dev/null || true
+[ -x "$BIN_DIR/fzf" ] && chmod +x "$BIN_DIR/fzf" 2>/dev/null || true
 echo -e "${GREEN}✓ Права на исполнение выданы!${RESET}"
 
 # ------------------------------------------------------------------------------
@@ -178,6 +229,7 @@ for target_dir in "/opt/homebrew/bin" "/usr/local/bin"; do
         echo -e "${GREEN}✓ Создана системная ссылка: $target_dir/yt${RESET}"
         [ -x "$BIN_DIR/yt-dlp" ] && ln -sf "$BIN_DIR/yt-dlp" "$target_dir/yt-dlp" 2>/dev/null || true
         [ -x "$BIN_DIR/ffmpeg" ] && ln -sf "$BIN_DIR/ffmpeg" "$target_dir/ffmpeg" 2>/dev/null || true
+        [ -x "$BIN_DIR/fzf" ] && ln -sf "$BIN_DIR/fzf" "$target_dir/fzf" 2>/dev/null || true
         break
     fi
 done
@@ -187,6 +239,7 @@ mkdir -p "$HOME/.local/bin" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/yt.sh" "$HOME/.local/bin/yt" 2>/dev/null || true
 [ -x "$BIN_DIR/yt-dlp" ] && ln -sf "$BIN_DIR/yt-dlp" "$HOME/.local/bin/yt-dlp" 2>/dev/null || true
 [ -x "$BIN_DIR/ffmpeg" ] && ln -sf "$BIN_DIR/ffmpeg" "$HOME/.local/bin/ffmpeg" 2>/dev/null || true
+[ -x "$BIN_DIR/fzf" ] && ln -sf "$BIN_DIR/fzf" "$HOME/.local/bin/fzf" 2>/dev/null || true
 
 # 3. Идемпотентная настройка алиаса и путей в shell profile
 SHELL_RC=""
@@ -226,3 +279,9 @@ echo -e "  1. Из любой папки терминала :  ${CYAN}yt${RESET}
 echo -e "  2. Или из папки проекта    :  ${CYAN}bash start.sh${RESET}"
 echo -e "  3. Проверка здоровья       :  ${CYAN}yt --doctor${RESET}"
 echo -e "─────────────────────────────────────────────────────────────\n"
+
+if [ -t 0 ] && [ -t 1 ] && [ "$NO_LAUNCH" != "true" ]; then
+    echo -e "${CYAN}🚀 Запуск yt (macOS Edition)...${RESET}\n"
+    sleep 1
+    exec "$SCRIPT_DIR/yt.sh"
+fi
