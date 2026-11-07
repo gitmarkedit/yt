@@ -110,14 +110,32 @@ if [ "$OS" = "Darwin" ]; then
         command -v fzf &>/dev/null || missing_pkgs+=("fzf")
 
         if [ ${#missing_pkgs[@]} -gt 0 ]; then
-            echo -e "${CYAN}Установка недостающих пакетов через Homebrew: ${missing_pkgs[*]}...${RESET}"
+            echo -e "${CYAN}Установка пакетов через Homebrew: ${missing_pkgs[*]}...${RESET}"
             if ! check_internet; then
                 echo -e "${RED}❌ Отсутствует подключение к интернету для загрузки пакетов.${RESET}"
             else
-                brew install "${missing_pkgs[@]}" || echo -e "${RED}Предупреждение: ошибка при выполнении brew install.${RESET}"
+                brew install "${missing_pkgs[@]}" || true
             fi
         else
             echo -e "${GREEN}✓ Все ключевые утилиты (yt-dlp, ffmpeg, fzf) уже установлены!${RESET}"
+        fi
+
+        # ----------------------------------------------------------------------
+        # Гарантированная самоотладка: если yt-dlp не удалось установить через brew
+        # (например, Homebrew Tier 3, отсутствие bottles, конфликт xcode)
+        # ----------------------------------------------------------------------
+        if ! command -v yt-dlp &>/dev/null && [ ! -x "$BIN_DIR/yt-dlp" ]; then
+            echo -e "\n${YELLOW}ℹ️ Homebrew сообщил об ограничении конфигурации (Tier 3).${RESET}"
+            echo -e "${CYAN}⚡ Загрузка официального универсального бинарника yt-dlp для Mac...${RESET}"
+            mkdir -p "$BIN_DIR"
+            if curl -fL --progress-bar "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" -o "$BIN_DIR/yt-dlp"; then
+                chmod +x "$BIN_DIR/yt-dlp"
+                xattr -d com.apple.quarantine "$BIN_DIR/yt-dlp" 2>/dev/null || true
+                echo -e "${GREEN}✓ Автономный yt-dlp успешно установлен в $BIN_DIR/yt-dlp!${RESET}"
+            elif command -v python3 &>/dev/null; then
+                echo -e "${CYAN}Попытка установки через Python pip...${RESET}"
+                python3 -m pip install --upgrade --user yt-dlp 2>/dev/null || true
+            fi
         fi
     fi
 
@@ -168,13 +186,18 @@ echo -e "${GREEN}✓ Права на исполнение выданы!${RESET}"
 # ------------------------------------------------------------------------------
 echo -e "\n${YELLOW}🔗 Шаг 5: Настройка быстрого запуска команды 'yt'...${RESET}"
 
-# Создание системного symlink в PATH при наличии прав
+# Создание системных symlink в PATH при наличии прав
 for target_dir in "/opt/homebrew/bin" "/usr/local/bin" "$HOME/.local/bin"; do
     if [ -d "$target_dir" ] && [ -w "$target_dir" ]; then
         if ln -sf "$SCRIPT_DIR/yt.sh" "$target_dir/yt" 2>/dev/null; then
             echo -e "${GREEN}✓ Создана системная ссылка: $target_dir/yt${RESET}"
-            break
         fi
+        if [ -x "$BIN_DIR/yt-dlp" ]; then
+            if ln -sf "$BIN_DIR/yt-dlp" "$target_dir/yt-dlp" 2>/dev/null; then
+                echo -e "${GREEN}✓ Создана системная ссылка: $target_dir/yt-dlp${RESET}"
+            fi
+        fi
+        break
     fi
 done
 

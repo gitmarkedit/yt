@@ -179,9 +179,18 @@ check_dependencies() {
                     exit 1
                 fi
             fi
-            export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.local/bin:$PATH"
+            export PATH="$SCRIPT_DIR/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$HOME/.local/bin:$PATH"
             if ! command -v yt-dlp &>/dev/null; then
-                echo -e "${RED}Не удалось автоматически запустить yt-dlp. Попробуйте перезапустить терминал.${RESET}"
+                echo -e "\n${YELLOW}⚡ Автономная установка официального бинарника yt-dlp для macOS...${RESET}"
+                mkdir -p "$SCRIPT_DIR/bin"
+                if curl -fL --progress-bar "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" -o "$SCRIPT_DIR/bin/yt-dlp"; then
+                    chmod +x "$SCRIPT_DIR/bin/yt-dlp"
+                    xattr -d com.apple.quarantine "$SCRIPT_DIR/bin/yt-dlp" 2>/dev/null || true
+                    echo -e "${GREEN}✓ yt-dlp успешно установлен в $SCRIPT_DIR/bin/yt-dlp!${RESET}"
+                fi
+            fi
+            if ! command -v yt-dlp &>/dev/null; then
+                echo -e "${RED}❌ Не удалось автоматически установить yt-dlp. Проверьте подключение к интернету.${RESET}"
                 exit 1
             fi
         else
