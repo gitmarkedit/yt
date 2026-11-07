@@ -329,7 +329,7 @@ get_url() {
             prompt_list="📋 Использовать из буфера macOS: $clip_url"
         fi
 
-        local res
+        local res exit_code
         res=$(printf "%s\n" "$prompt_list" | fzf \
             --print-query \
             --height=7 \
@@ -337,45 +337,70 @@ get_url() {
             --border=rounded \
             --prompt="Ссылка > " \
             --header="Вставьте ссылку и нажмите Enter (Esc - выход):" \
-            --bind="esc:cancel,ctrl-c:abort" \
+            --bind="enter:accept-or-print-query,esc:cancel,ctrl-c:abort" \
             --color="prompt:cyan,pointer:magenta,header:yellow,border:blue")
+        exit_code=$?
 
-        local exit_code=$?
-        [ $exit_code -ne 0 ] && return 1
+        # 130 = нажатие Esc или Ctrl+C (явная отмена / выход)
+        if [ $exit_code -eq 130 ]; then
+            return 130
+        fi
 
         local typed_query selected_item
-        typed_query=$(echo "$res" | sed -n '1p')
-        selected_item=$(echo "$res" | sed -n '2p')
+        typed_query=$(echo "$res" | sed -n '1p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        selected_item=$(echo "$res" | sed -n '2p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
-        # Если пользователь напечатал/вставил ссылку в строку fzf
+        # 1. Если пользователь вставил или напечатал ссылку (любой текст в строке fzf)
         if [ -n "$typed_query" ]; then
+            if [[ "$typed_query" =~ ^(q|quit|exit)$ ]]; then
+                return 130
+            fi
             echo "$typed_query"
-        # Если выбрал пункт с ссылкой из буфера
+            return 0
+        # 2. Если пользователь нажал Enter на строке с ссылкой из буфера
         elif [ -n "$selected_item" ]; then
             local extracted_url
             extracted_url=$(echo "$selected_item" | grep -o 'https\?://[^ ]*')
             if [ -n "$extracted_url" ]; then
                 echo "$extracted_url"
+                return 0
             else
                 echo "$selected_item"
+                return 0
             fi
-        elif [ -n "$clip_url" ]; then
-            echo "$clip_url"
-        fi
-    else
-        if [ -n "$clip_url" ]; then
-            echo -e "${CYAN}Найдена ссылка в буфере обмена Mac:${RESET} $clip_url"
-            local use_clip=""
-            read -r -p "Использовать её? [Y/n]: " use_clip
-            use_clip=${use_clip:-y}
-            if [[ "$use_clip" =~ ^[YyДд] ]]; then
-                echo "$clip_url"
+        # 3. Динамическая проверка: если пользователь скопировал ссылку, пока окно было открыто
+        elif command -v pbpaste &>/dev/null; then
+            local fresh_clip
+            fresh_clip=$(pbpaste 2>/dev/null | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            if [[ "$fresh_clip" =~ ^https?:// ]]; then
+                echo "$fresh_clip"
                 return 0
             fi
         fi
+
+        return 1
+    else
+        local clip_msg=""
+        if [ -n "$clip_url" ]; then
+            clip_msg=" (Enter для ссылки из буфера: $clip_url)"
+        fi
+        echo -e "${CYAN}Вставьте ссылку на медиа${clip_msg}${RESET}"
         local manual_url=""
-        read -r -p "Вставьте ссылку на медиа: " manual_url
-        echo "$manual_url"
+        if ! read -r -p "Ссылка (или 'q' для выхода) > " manual_url; then
+            return 130
+        fi
+        manual_url=$(echo "$manual_url" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        if [[ "$manual_url" =~ ^(q|quit|exit)$ ]]; then
+            return 130
+        fi
+        if [ -n "$manual_url" ]; then
+            echo "$manual_url"
+            return 0
+        elif [ -n "$clip_url" ]; then
+            echo "$clip_url"
+            return 0
+        fi
+        return 1
     fi
 }
 
@@ -1106,18 +1131,28 @@ main() {
         show_banner
 
         local URL=""
+        local url_status=0
         if [ -n "$initial_url" ]; then
             URL="$initial_url"
             initial_url=""
         else
             URL=$(get_url)
+            url_status=$?
+        fi
+
+        # Если пользователь явно нажал Esc или ввел 'q'/'exit'
+        if [ $url_status -eq 130 ]; then
+            echo -e "${GREEN}До встречи! 👋${RESET}"
+            exit 0
         fi
 
         URL=$(echo "$URL" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
+        # Если ссылка не указана (например, пользователь нажал Enter без вставки ссылки)
         if [ -z "$URL" ]; then
-            echo -e "${GREEN}До встречи! 👋${RESET}"
-            exit 0
+            echo -e "${YELLOW}⚠️ Ссылка не указана. Вставьте ссылку на медиа или нажмите Esc для выхода.${RESET}"
+            sleep 1.5
+            continue
         fi
 
         fetch_and_display_info "$URL"
