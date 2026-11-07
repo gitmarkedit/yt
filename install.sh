@@ -372,7 +372,7 @@ if [ -n "$SHELL_RC" ] && [ -f "$SHELL_RC" ]; then
     fi
 fi
 
-echo -e "\n${GREEN}${BOLD}🎉 УСТАНОВКА И ОПТИМИЗАЦИЯ ЗАВЕРШЕНЫ!${RESET}"
+echo -e "\n${GREEN}${BOLD}✓ УСТАНОВКА И ОПТИМИЗАЦИЯ ЗАВЕРШЕНЫ${RESET}"
 echo -e "─────────────────────────────────────────────────────────────"
 echo -e "${BOLD}Как запускать программу:${RESET}"
 echo -e "  1. Из любой папки терминала :  ${CYAN}yt${RESET}"
@@ -381,7 +381,7 @@ echo -e "  3. Проверка здоровья       :  ${CYAN}yt --doctor${RES
 echo -e "─────────────────────────────────────────────────────────────\n"
 
 if [ -t 0 ] && [ -t 1 ] && [ "$NO_LAUNCH" != "true" ]; then
-    echo -e "${CYAN}🚀 Запуск yt (macOS Edition)...${RESET}\n"
+    echo -e "${CYAN}▶ Запуск yt (macOS Edition)...${RESET}\n"
     sleep 1
     exec "$SCRIPT_DIR/yt.sh"
 fi
