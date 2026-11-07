@@ -39,21 +39,26 @@
 
 ---
 
-## 🚀 Быстрый старт
+## 🚀 Быстрый старт (Установка в 1 команду)
 
-### Шаг 1. Клонирование репозитория
+### Вариант 1. Универсальная установка с нуля (Рекомендуется для всех)
+Не требует ни **Homebrew**, ни **Xcode**, ни прав администратора. Работает на любом Mac (Apple Silicon M1/M2/M3/M4 & Intel):
+
+Откройте программу **Терминал** и вставьте одну команду:
 ```bash
-git clone https://github.com/gitmarkedit/yt.git
-cd yt
+mkdir -p ~/yt && curl -fsSL https://github.com/gitmarkedit/yt/archive/refs/heads/main.tar.gz | tar -xz -C ~/yt --strip-components=1 && bash ~/yt/install.sh && yt
 ```
 
-### Шаг 2. Автоматическая установка зависимостей
-```bash
-bash install.sh
-```
-*Скрипт идемпотентно проверит систему, установит недостающие пакеты и создаст команду `yt`.*
+---
 
-### Шаг 3. Запуск
+### Вариант 2. Через Git (для разработчиков)
+```bash
+git clone https://github.com/gitmarkedit/yt.git ~/yt && cd ~/yt && bash install.sh && yt
+```
+
+---
+
+### Как запускать программу в дальнейшем:
 Из любой папки терминала:
 ```bash
 yt
@@ -62,7 +67,7 @@ yt
 ```bash
 yt "https://www.youtube.com/watch?v=..."
 ```
-*(Также всегда доступен локальный запуск через `bash start.sh`).*
+*(Также всегда доступен локальный запуск через `bash start.sh` внутри папки `~/yt`).*
 
 ---
 

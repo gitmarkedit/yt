@@ -189,8 +189,25 @@ check_dependencies() {
                     echo -e "${GREEN}✓ yt-dlp успешно установлен в $SCRIPT_DIR/bin/yt-dlp!${RESET}"
                 fi
             fi
-            if ! command -v yt-dlp &>/dev/null; then
-                echo -e "${RED}❌ Не удалось автоматически установить yt-dlp. Проверьте подключение к интернету.${RESET}"
+            if ! command -v ffmpeg &>/dev/null; then
+                echo -e "\n${YELLOW}⚡ Автономная установка медиа-движка FFmpeg (с ускорением VideoToolbox)...${RESET}"
+                mkdir -p "$SCRIPT_DIR/bin"
+                local arch
+                arch="$(uname -m 2>/dev/null || echo "arm64")"
+                local temp_dir="$SCRIPT_DIR/bin/temp_extract"
+                mkdir -p "$temp_dir"
+                if curl -fL --progress-bar "https://github.com/homebridge/ffmpeg-for-homebridge/releases/latest/download/ffmpeg-darwin-${arch}.tar.gz" | tar -xz -C "$temp_dir" 2>/dev/null; then
+                    if [ -f "$temp_dir/usr/local/bin/ffmpeg" ]; then
+                        mv "$temp_dir/usr/local/bin/ffmpeg" "$SCRIPT_DIR/bin/ffmpeg"
+                        chmod +x "$SCRIPT_DIR/bin/ffmpeg"
+                        xattr -d com.apple.quarantine "$SCRIPT_DIR/bin/ffmpeg" 2>/dev/null || true
+                        echo -e "${GREEN}✓ FFmpeg успешно установлен в $SCRIPT_DIR/bin/ffmpeg!${RESET}"
+                    fi
+                fi
+                rm -rf "$temp_dir"
+            fi
+            if ! command -v yt-dlp &>/dev/null || ! command -v ffmpeg &>/dev/null; then
+                echo -e "${RED}❌ Не удалось автоматически установить компоненты. Проверьте подключение к интернету.${RESET}"
                 exit 1
             fi
         else

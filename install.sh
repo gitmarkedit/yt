@@ -2,6 +2,7 @@
 # ==============================================================================
 #  ⚡ Установщик yt (macOS Edition)
 #  Оптимизировано для macOS (Apple Silicon M1/M2/M3/M4 & Intel) и Linux
+#  Автономный режим: не требует предварительной установки Xcode или Homebrew
 # ==============================================================================
 
 # Определение директории скрипта
@@ -9,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$SCRIPT_DIR/bin"
 mkdir -p "$BIN_DIR" 2>/dev/null || true
 
-# Автоматическое подключение стандартных путей Homebrew
+# Автоматическое подключение стандартных путей
 export PATH="$BIN_DIR:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$HOME/.local/bin:$PATH"
 
 # Цвета
@@ -46,64 +47,63 @@ check_internet() {
 }
 
 # ------------------------------------------------------------------------------
-# Шаг 2: Установка зависимостей (yt-dlp, ffmpeg, fzf)
+# Автономные функции загрузки бинарников для macOS
 # ------------------------------------------------------------------------------
-echo -e "${YELLOW}📦 Шаг 2: Проверка и установка зависимостей...${RESET}"
+install_standalone_ytdlp() {
+    if ! command -v yt-dlp &>/dev/null && [ ! -x "$BIN_DIR/yt-dlp" ]; then
+        echo -e "${CYAN}⚡ Загрузка официального универсального yt-dlp для macOS...${RESET}"
+        mkdir -p "$BIN_DIR"
+        if curl -fL --progress-bar "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" -o "$BIN_DIR/yt-dlp"; then
+            chmod +x "$BIN_DIR/yt-dlp"
+            xattr -d com.apple.quarantine "$BIN_DIR/yt-dlp" 2>/dev/null || true
+            echo -e "${GREEN}✓ yt-dlp успешно установлен в $BIN_DIR/yt-dlp!${RESET}"
+            return 0
+        fi
+        return 1
+    fi
+    return 0
+}
+
+install_standalone_ffmpeg() {
+    if ! command -v ffmpeg &>/dev/null && [ ! -x "$BIN_DIR/ffmpeg" ]; then
+        echo -e "${CYAN}⚡ Загрузка медиа-движка FFmpeg (с ускорением VideoToolbox для $ARCH)...${RESET}"
+        mkdir -p "$BIN_DIR"
+        local temp_dir="$BIN_DIR/temp_extract"
+        mkdir -p "$temp_dir"
+        if curl -fL --progress-bar "https://github.com/homebridge/ffmpeg-for-homebridge/releases/latest/download/ffmpeg-darwin-${ARCH}.tar.gz" | tar -xz -C "$temp_dir" 2>/dev/null; then
+            if [ -f "$temp_dir/usr/local/bin/ffmpeg" ]; then
+                mv "$temp_dir/usr/local/bin/ffmpeg" "$BIN_DIR/ffmpeg"
+                chmod +x "$BIN_DIR/ffmpeg"
+                xattr -d com.apple.quarantine "$BIN_DIR/ffmpeg" 2>/dev/null || true
+                echo -e "${GREEN}✓ FFmpeg с VideoToolbox успешно установлен в $BIN_DIR/ffmpeg!${RESET}"
+            fi
+        fi
+        rm -rf "$temp_dir"
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Шаг 2: Проверка и установка зависимостей
+# ------------------------------------------------------------------------------
+echo -e "${YELLOW}📦 Шаг 2: Проверка и настройка компонентов...${RESET}"
 
 if [ "$OS" = "Darwin" ]; then
-    # Подключение brew окружения
+    if ! check_internet; then
+        echo -e "${RED}❌ Отсутствует подключение к интернету для загрузки компонентов.${RESET}"
+        echo -e "${YELLOW}Подключитесь к сети и повторите запуск.${RESET}"
+        exit 1
+    fi
+
+    # 1. Если Homebrew уже установлен, пробуем штатную установку
     if [ -x "/opt/homebrew/bin/brew" ]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
     elif [ -x "/usr/local/bin/brew" ]; then
         eval "$(/usr/local/bin/brew shellenv)"
     fi
 
-    if ! command -v brew &>/dev/null; then
-        echo -e "${YELLOW}Homebrew не обнаружен на вашем Mac.${RESET}"
-        
-        if ! check_internet; then
-            echo -e "${RED}❌ Отсутствует подключение к интернету.${RESET}"
-            echo -e "${YELLOW}Подключитесь к сети и повторите: bash install.sh${RESET}"
-            exit 1
-        fi
-
-        brew_choice="1"
-        if [ -t 0 ]; then
-            echo -e "Выберите способ установки:"
-            echo -e "  ${CYAN}1)${RESET} Установить Homebrew и все пакеты автоматически (Рекомендуется)"
-            echo -e "  ${CYAN}2)${RESET} Скачать автономный yt-dlp напрямую (Быстро, без Homebrew)"
-            read -r -p "Выберите вариант [1/2, по умолчанию 1]: " brew_choice
-            brew_choice=${brew_choice:-1}
-        fi
-
-        if [ "$brew_choice" = "1" ]; then
-            echo -e "\n${CYAN}Установка Homebrew...${RESET}"
-            if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
-                if [ -x "/opt/homebrew/bin/brew" ]; then
-                    eval "$(/opt/homebrew/bin/brew shellenv)"
-                elif [ -x "/usr/local/bin/brew" ]; then
-                    eval "$(/usr/local/bin/brew shellenv)"
-                fi
-                echo -e "${CYAN}Установка yt-dlp, ffmpeg и fzf через Homebrew...${RESET}"
-                brew install yt-dlp ffmpeg fzf || echo -e "${RED}Предупреждение: некоторые пакеты не удалось установить.${RESET}"
-            else
-                echo -e "${RED}❌ Не удалось установить Homebrew.${RESET}"
-            fi
-        else
-            echo -e "\n${CYAN}Скачивание автономного yt-dlp для macOS...${RESET}"
-            if curl -fL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" -o "$BIN_DIR/yt-dlp"; then
-                chmod +x "$BIN_DIR/yt-dlp"
-                echo -e "${GREEN}✓ yt-dlp установлен в $BIN_DIR/yt-dlp${RESET}"
-            else
-                echo -e "${RED}❌ Не удалось скачать yt-dlp.${RESET}"
-            fi
-
-            if ! command -v ffmpeg &>/dev/null; then
-                echo -e "${YELLOW}Внимание: для объединения 4K видео и конвертации в MP3 рекомендуется ffmpeg.${RESET}"
-            fi
-        fi
-    else
-        echo -e "${GREEN}✓ Homebrew обнаружен${RESET}"
+    if command -v brew &>/dev/null; then
+        echo -e "${GREEN}✓ Обнаружен Homebrew${RESET}"
         missing_pkgs=()
         command -v yt-dlp &>/dev/null || missing_pkgs+=("yt-dlp")
         command -v ffmpeg &>/dev/null || missing_pkgs+=("ffmpeg")
@@ -111,33 +111,16 @@ if [ "$OS" = "Darwin" ]; then
 
         if [ ${#missing_pkgs[@]} -gt 0 ]; then
             echo -e "${CYAN}Установка пакетов через Homebrew: ${missing_pkgs[*]}...${RESET}"
-            if ! check_internet; then
-                echo -e "${RED}❌ Отсутствует подключение к интернету для загрузки пакетов.${RESET}"
-            else
-                brew install "${missing_pkgs[@]}" || true
-            fi
+            brew install "${missing_pkgs[@]}" 2>&1 || true
         else
-            echo -e "${GREEN}✓ Все ключевые утилиты (yt-dlp, ffmpeg, fzf) уже установлены!${RESET}"
-        fi
-
-        # ----------------------------------------------------------------------
-        # Гарантированная самоотладка: если yt-dlp не удалось установить через brew
-        # (например, Homebrew Tier 3, отсутствие bottles, конфликт xcode)
-        # ----------------------------------------------------------------------
-        if ! command -v yt-dlp &>/dev/null && [ ! -x "$BIN_DIR/yt-dlp" ]; then
-            echo -e "\n${YELLOW}ℹ️ Homebrew сообщил об ограничении конфигурации (Tier 3).${RESET}"
-            echo -e "${CYAN}⚡ Загрузка официального универсального бинарника yt-dlp для Mac...${RESET}"
-            mkdir -p "$BIN_DIR"
-            if curl -fL --progress-bar "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" -o "$BIN_DIR/yt-dlp"; then
-                chmod +x "$BIN_DIR/yt-dlp"
-                xattr -d com.apple.quarantine "$BIN_DIR/yt-dlp" 2>/dev/null || true
-                echo -e "${GREEN}✓ Автономный yt-dlp успешно установлен в $BIN_DIR/yt-dlp!${RESET}"
-            elif command -v python3 &>/dev/null; then
-                echo -e "${CYAN}Попытка установки через Python pip...${RESET}"
-                python3 -m pip install --upgrade --user yt-dlp 2>/dev/null || true
-            fi
+            echo -e "${GREEN}✓ Все ключевые утилиты уже установлены!${RESET}"
         fi
     fi
+
+    # 2. Автономный Fallback: гарантированная загрузка бинарников
+    # Работает если Homebrew отсутствует, выдает ошибку Tier 3 или нет прав root
+    install_standalone_ytdlp
+    install_standalone_ffmpeg
 
 elif [ "$OS" = "Linux" ]; then
     if ! check_internet; then
@@ -171,7 +154,7 @@ if command -v ffmpeg &>/dev/null; then
         echo -e "${YELLOW}ℹ️ VideoToolbox не активен, используется стандартный CPU.${RESET}"
     fi
 else
-    echo -e "${RED}⚠️ FFmpeg не найден! Аппаратное кодирование недоступно.${RESET}"
+    echo -e "${RED}⚠️ FFmpeg не найден!${RESET}"
 fi
 
 # ------------------------------------------------------------------------------
@@ -179,29 +162,33 @@ fi
 # ------------------------------------------------------------------------------
 echo -e "\n${YELLOW}⚙️ Шаг 4: Настройка прав запуска...${RESET}"
 chmod +x "$SCRIPT_DIR/yt.sh" "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/install.sh" 2>/dev/null || true
+[ -x "$BIN_DIR/yt-dlp" ] && chmod +x "$BIN_DIR/yt-dlp" 2>/dev/null || true
+[ -x "$BIN_DIR/ffmpeg" ] && chmod +x "$BIN_DIR/ffmpeg" 2>/dev/null || true
 echo -e "${GREEN}✓ Права на исполнение выданы!${RESET}"
 
 # ------------------------------------------------------------------------------
-# Шаг 5: Настройка глобальной команды 'yt' (Идемпотентная конфигурация)
+# Шаг 5: Настройка глобальной команды 'yt' и системных путей
 # ------------------------------------------------------------------------------
 echo -e "\n${YELLOW}🔗 Шаг 5: Настройка быстрого запуска команды 'yt'...${RESET}"
 
-# Создание системных symlink в PATH при наличии прав
-for target_dir in "/opt/homebrew/bin" "/usr/local/bin" "$HOME/.local/bin"; do
+# 1. Попытка создания системных ссылок в глобальные папки
+for target_dir in "/opt/homebrew/bin" "/usr/local/bin"; do
     if [ -d "$target_dir" ] && [ -w "$target_dir" ]; then
-        if ln -sf "$SCRIPT_DIR/yt.sh" "$target_dir/yt" 2>/dev/null; then
-            echo -e "${GREEN}✓ Создана системная ссылка: $target_dir/yt${RESET}"
-        fi
-        if [ -x "$BIN_DIR/yt-dlp" ]; then
-            if ln -sf "$BIN_DIR/yt-dlp" "$target_dir/yt-dlp" 2>/dev/null; then
-                echo -e "${GREEN}✓ Создана системная ссылка: $target_dir/yt-dlp${RESET}"
-            fi
-        fi
+        ln -sf "$SCRIPT_DIR/yt.sh" "$target_dir/yt" 2>/dev/null && \
+        echo -e "${GREEN}✓ Создана системная ссылка: $target_dir/yt${RESET}"
+        [ -x "$BIN_DIR/yt-dlp" ] && ln -sf "$BIN_DIR/yt-dlp" "$target_dir/yt-dlp" 2>/dev/null || true
+        [ -x "$BIN_DIR/ffmpeg" ] && ln -sf "$BIN_DIR/ffmpeg" "$target_dir/ffmpeg" 2>/dev/null || true
         break
     fi
 done
 
-# Идемпотентная настройка алиаса в shell profile
+# 2. Пользовательская папка ~/.local/bin (всегда доступна без прав root)
+mkdir -p "$HOME/.local/bin" 2>/dev/null || true
+ln -sf "$SCRIPT_DIR/yt.sh" "$HOME/.local/bin/yt" 2>/dev/null || true
+[ -x "$BIN_DIR/yt-dlp" ] && ln -sf "$BIN_DIR/yt-dlp" "$HOME/.local/bin/yt-dlp" 2>/dev/null || true
+[ -x "$BIN_DIR/ffmpeg" ] && ln -sf "$BIN_DIR/ffmpeg" "$HOME/.local/bin/ffmpeg" 2>/dev/null || true
+
+# 3. Идемпотентная настройка алиаса и путей в shell profile
 SHELL_RC=""
 if [ -n "$ZSH_VERSION" ] || [ "${SHELL##*/}" = "zsh" ] || [ -f "$HOME/.zshrc" ]; then
     SHELL_RC="$HOME/.zshrc"
@@ -225,6 +212,7 @@ if [ -n "$SHELL_RC" ] && [ -f "$SHELL_RC" ]; then
         {
             echo ""
             echo "# yt (macOS Edition)"
+            echo "export PATH=\"\$HOME/.local/bin:$BIN_DIR:\$PATH\""
             echo "$expected_alias"
         } >> "$SHELL_RC"
         echo -e "${GREEN}✓ Алиас 'yt' настроен в $SHELL_RC${RESET}"
